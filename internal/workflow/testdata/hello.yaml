@@ -1,0 +1,10 @@
+---
+
+name: hello
+schedule: '* * * * *'
+graph:
+  - name: hello
+    type: task
+    script: |-
+      echo "Hello, World"
+...
