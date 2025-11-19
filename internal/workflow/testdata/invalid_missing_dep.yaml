@@ -1,0 +1,12 @@
+---
+
+name: missing_dep
+schedule: "* * * * *"
+
+tasks:
+  - name: a
+    script: echo hi
+    depends_on:
+      - b
+
+...

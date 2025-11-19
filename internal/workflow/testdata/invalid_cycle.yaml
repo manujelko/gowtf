@@ -1,0 +1,15 @@
+---
+
+name: cycle
+schedule: "* * * * *"
+
+tasks:
+  - name: a
+    script: echo hi
+    depends_on: [b]
+
+  - name: b
+    script: echo hi
+    depends_on: [a]
+
+...

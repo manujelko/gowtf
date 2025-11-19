@@ -1,0 +1,13 @@
+---
+
+name: dup
+schedule: "* * * * *"
+
+tasks:
+  - name: a
+    script: echo hi
+
+  - name: a
+    script: echo hi
+
+...

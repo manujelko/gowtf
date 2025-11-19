@@ -1,42 +1,270 @@
 package workflow
 
-import "testing"
+import (
+	"maps"
+	"strings"
+	"testing"
+)
 
-func TestParseHello(t *testing.T) {
-	wf, err := Parse("testdata/hello.yaml")
+func TestLoadSimple(t *testing.T) {
+	wf, err := Load("testdata/simple.yaml")
 	if err != nil {
-		t.Fatalf("failed to read fixture: %v", err)
+		t.Fatalf("failed to load workflow: %v", err)
 	}
 
-	expectedName := "hello"
-	if wf.Name != expectedName {
-		t.Errorf("incorrect workflow name, got %s, want %s", wf.Name, expectedName)
+	if wf.Name != "hello" {
+		t.Errorf("unexpected workflow name: got %q, want %q", wf.Name, "hello")
 	}
 
-	expectedSchedule := "* * * * *"
-	if wf.Schedule != expectedSchedule {
-		t.Errorf("incorrect workflow schedule, got %s, want %s", wf.Schedule, expectedSchedule)
+	if wf.Schedule != "* * * * *" {
+		t.Errorf("unexpected workflow schedule: got %q, want %q", wf.Schedule, "* * * * *")
 	}
 
-	expectedNodes := 1
-	if len(wf.Graph) != expectedNodes {
-		t.Errorf("incorrect number of nodes, got %d, want %d", len(wf.Graph), expectedNodes)
+	if len(wf.Tasks) != 1 {
+		t.Fatalf("unexpected number of tasks: got %d, want 1", len(wf.Tasks))
 	}
 
-	node := wf.Graph[0]
-
-	expectedNodeName := "hello"
-	if node.Name != expectedNodeName {
-		t.Errorf("incorrect node name, got %s, want %s", node.Name, expectedNodeName)
+	task := wf.Tasks[0]
+	want := Task{
+		Name:   "hello",
+		Script: `echo "Hello, World"`,
 	}
 
-	expectedNodeType := "task"
-	if node.Type != expectedNodeType {
-		t.Errorf("incorrect node type, got %s, want %s", node.Type, expectedNodeType)
+	if task.Name != want.Name {
+		t.Errorf("unexpected task name: got %q, want %q", task.Name, want.Name)
 	}
 
-	expectedScript := "echo \"Hello, World\""
-	if node.Script != expectedScript {
-		t.Errorf("incorrect script, got %s, want %s", node.Script, expectedScript)
+	if task.Script != want.Script {
+		t.Errorf("unexpected task script: got %q, want %q", task.Script, want.Script)
 	}
+}
+
+func TestLoadComplex(t *testing.T) {
+	wf, err := Load("testdata/complex.yaml")
+	if err != nil {
+		t.Fatalf("failed to load workflow: %v", err)
+	}
+
+	if wf.Name != "daily_etl" {
+		t.Errorf("unexpected workflow name: got %q, want %q", wf.Name, "daily_etl")
+	}
+
+	wantEnv := map[string]string{
+		"DATA_DIR": "/var/data",
+		"DATE":     "{{ today }}",
+	}
+	if !maps.Equal(wf.Env, wantEnv) {
+		t.Errorf("unexpected workflow env:\n got:  %#v\n want: %#v", wf.Env, wantEnv)
+	}
+
+	if len(wf.Tasks) != 9 {
+		t.Fatalf("unexpected number of tasks: got %d, want 9", len(wf.Tasks))
+	}
+
+	tests := []struct {
+		i              int
+		name           string
+		deps           []string
+		when           string
+		scriptContains []string
+		retries        int
+		retryDelay     string
+		timeout        string
+	}{
+		{
+			i: 0, name: "fetch_users",
+			scriptContains: []string{
+				"curl -s https://api.example.com/users",
+				"$DATA_DIR/users.json",
+			},
+			retries: 3, retryDelay: "30s", timeout: "2m",
+		},
+		{
+			i: 1, name: "fetch_orders",
+			scriptContains: []string{
+				"curl -s https://api.example.com/orders",
+				"$DATA_DIR/orders.json",
+			},
+			retries: 3, retryDelay: "30s", timeout: "2m",
+		},
+		{
+			i: 2, name: "fetch_products",
+			scriptContains: []string{
+				"curl -s https://api.example.com/products",
+				"$DATA_DIR/products.json",
+			},
+			retries: 3, retryDelay: "30s", timeout: "2m",
+		},
+		{
+			i: 3, name: "validate_data",
+			deps: []string{"fetch_users", "fetch_orders", "fetch_products"},
+			when: "all_upstream.success",
+			scriptContains: []string{
+				"python validate.py",
+				"--users $DATA_DIR/users.json",
+				"--orders $DATA_DIR/orders.json",
+				"--products $DATA_DIR/products.json",
+			},
+		},
+		{
+			i: 4, name: "send_alert",
+			deps: []string{"validate_data"},
+			when: "validate_data.failed",
+			scriptContains: []string{
+				"./alert.sh",
+				"Validation failed for ETL on $DATE",
+			},
+		},
+		{
+			i: 5, name: "transform_data",
+			deps: []string{"validate_data"},
+			when: "validate_data.success",
+			scriptContains: []string{
+				"python transform.py",
+				"--input-dir $DATA_DIR",
+				"--output $DATA_DIR/clean.json",
+			},
+		},
+		{
+			i: 6, name: "load_to_warehouse",
+			deps: []string{"transform_data"},
+			when: "transform_data.success",
+			scriptContains: []string{
+				"python load.py",
+				"--source $DATA_DIR/clean.json",
+			},
+			timeout: "10m",
+		},
+		{
+			i: 7, name: "notify_success",
+			deps: []string{"load_to_warehouse"},
+			when: "load_to_warehouse.success",
+			scriptContains: []string{
+				"./notify.sh",
+				"ETL succeeded for $DATE",
+			},
+		},
+		{
+			i: 8, name: "notify_failure",
+			deps: []string{"send_alert", "load_to_warehouse"},
+			when: "any_upstream.failed",
+			scriptContains: []string{
+				"./notify.sh",
+				"ETL failed for $DATE",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := wf.Tasks[tt.i]
+
+			if task.Name != tt.name {
+				t.Errorf("unexpected name: got %q, want %q", task.Name, tt.name)
+			}
+
+			if !equalStringSlices(task.DependsOn, tt.deps) {
+				t.Errorf("unexpected dependencies for %s: got %v, want %v", tt.name, task.DependsOn, tt.deps)
+			}
+
+			if task.When != tt.when {
+				t.Errorf("unexpected when for %s: got %q, want %q", tt.name, task.When, tt.when)
+			}
+
+			for _, frag := range tt.scriptContains {
+				if !strings.Contains(task.Script, frag) {
+					t.Errorf("script for %s missing fragment %q.\nFull script:\n%s", tt.name, frag, task.Script)
+				}
+			}
+
+			if task.Retries != tt.retries {
+				t.Errorf("unexpected retries for %s: got %d, want %d", tt.name, task.Retries, tt.retries)
+			}
+
+			if task.RetryDelay != tt.retryDelay {
+				t.Errorf("unexpected retryDelay for %s: got %q, want %q", tt.name, task.RetryDelay, tt.retryDelay)
+			}
+
+			if task.Timeout != tt.timeout {
+				t.Errorf("unexpected timeout for %s: got %q, want %q", tt.name, task.Timeout, tt.timeout)
+			}
+		})
+	}
+}
+
+func TestValidation_DuplicateTaskNames(t *testing.T) {
+	_, err := Load("testdata/invalid_duplicate.yaml")
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate task name") {
+		t.Fatalf("expected duplicate task error, got: %v", err)
+	}
+}
+
+func TestValidation_MissingDependency(t *testing.T) {
+	_, err := Load("testdata/invalid_missing_dep.yaml")
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "depends_on") {
+		t.Fatalf("expected depends_on error, got: %v", err)
+	}
+}
+
+func TestValidation_Cycle(t *testing.T) {
+	_, err := Load("testdata/invalid_cycle.yaml")
+	if err == nil {
+		t.Fatal("expected cycle validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "cycle detected") {
+		t.Fatalf("expected cycle error, got: %v", err)
+	}
+}
+
+func TestValidation_MissingTaskName(t *testing.T) {
+	_, err := Load("testdata/invalid_no_task_name.yaml")
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "task without name") {
+		t.Fatalf("expected missing task name error, got: %v", err)
+	}
+}
+
+func TestValidation_MissingScript(t *testing.T) {
+	_, err := Load("testdata/invalid_no_script.yaml")
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "missing script") {
+		t.Fatalf("expected missing script error, got: %v", err)
+	}
+}
+
+func TestValidation_MissingSchedule(t *testing.T) {
+	_, err := Load("testdata/invalid_no_schedule.yaml")
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "schedule is required") {
+		t.Fatalf("expected missing schedule error, got: %v", err)
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	m := make(map[string]int, len(a))
+	for _, s := range a {
+		m[s]++
+	}
+	for _, s := range b {
+		if m[s] == 0 {
+			return false
+		}
+		m[s]--
+	}
+	return true
 }

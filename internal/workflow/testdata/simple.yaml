@@ -2,9 +2,9 @@
 
 name: hello
 schedule: '* * * * *'
-graph:
+
+tasks:
   - name: hello
-    type: task
     script: |-
       echo "Hello, World"
 ...

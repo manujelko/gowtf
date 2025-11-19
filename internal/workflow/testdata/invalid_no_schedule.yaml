@@ -1,0 +1,9 @@
+---
+
+name: bad
+
+tasks:
+  - name: a
+    script: echo hi
+
+...

@@ -1,0 +1,77 @@
+---
+
+name: daily_etl
+schedule: "0 2 * * *"   # every day at 02:00
+
+env:                    # workflow-level env
+  DATA_DIR: "/var/data"
+  DATE: "{{ today }}"
+
+tasks:
+  # Step 1: Fetch raw data from remote APIs in parallel
+  - name: fetch_users
+    script: "curl -s https://api.example.com/users > $DATA_DIR/users.json"
+    retries: 3
+    retry_delay: "30s"
+    timeout: "2m"
+
+  - name: fetch_orders
+    script: "curl -s https://api.example.com/orders > $DATA_DIR/orders.json"
+    retries: 3
+    retry_delay: "30s"
+    timeout: "2m"
+
+  - name: fetch_products
+    script: "curl -s https://api.example.com/products > $DATA_DIR/products.json"
+    retries: 3
+    retry_delay: "30s"
+    timeout: "2m"
+
+  # Step 2: Validate data only when ALL fetches succeeded
+  - name: validate_data
+    depends_on: [fetch_users, fetch_orders, fetch_products]
+    when: all_upstream.success
+    script: |
+      python validate.py \
+        --users $DATA_DIR/users.json \
+        --orders $DATA_DIR/orders.json \
+        --products $DATA_DIR/products.json
+
+  # Step 3: If validation fails, skip the transform and send an alert
+  - name: send_alert
+    depends_on: [validate_data]
+    when: validate_data.failed
+    script: |
+      ./alert.sh "Validation failed for ETL on $DATE"
+
+  # Step 4: Otherwise transform data and merge into warehouse
+  - name: transform_data
+    depends_on: [validate_data]
+    when: validate_data.success
+    script: |
+      python transform.py \
+        --input-dir $DATA_DIR \
+        --output $DATA_DIR/clean.json
+
+  - name: load_to_warehouse
+    depends_on: [transform_data]
+    when: transform_data.success
+    timeout: "10m"
+    script: |
+      python load.py --source $DATA_DIR/clean.json
+
+  # Step 5: Final notification (only if ETL succeeded)
+  - name: notify_success
+    depends_on: [load_to_warehouse]
+    when: load_to_warehouse.success
+    script: |
+      ./notify.sh "ETL succeeded for $DATE"
+
+  # Step 6: Final failure hook (if either validation or load failed)
+  - name: notify_failure
+    depends_on: [send_alert, load_to_warehouse]
+    when: any_upstream.failed
+    script: |
+      ./notify.sh "ETL failed for $DATE"
+
+...
