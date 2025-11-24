@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"fmt"
 	"time"
 )
 
@@ -15,6 +16,7 @@ const (
 	TaskStateRunning
 	TaskStateSkipped
 	TaskStateSuccess
+	TaskStateFailed
 )
 
 var taskInstanceStateNames = map[TaskInstanceState]string{
@@ -23,6 +25,7 @@ var taskInstanceStateNames = map[TaskInstanceState]string{
 	TaskStateRunning: "running",
 	TaskStateSkipped: "skipped",
 	TaskStateSuccess: "success",
+	TaskStateFailed:  "failed",
 }
 
 func (s TaskInstanceState) String() string {
@@ -33,13 +36,13 @@ func (s TaskInstanceState) String() string {
 	return name
 }
 
-func ParseTaskInstanceState(str string) TaskInstanceState {
+func ParseTaskInstanceState(str string) (TaskInstanceState, error) {
 	for k, v := range taskInstanceStateNames {
 		if v == str {
-			return k
+			return k, nil
 		}
 	}
-	panic("unknown TaskInstanceState: " + str)
+	return 0, fmt.Errorf("unknown TaskInstanceState: %q", str)
 }
 
 type TaskInstance struct {
@@ -171,7 +174,6 @@ func (s *TaskInstanceStore) Update(ctx context.Context, ti *TaskInstance) error 
 		startedAt,
 		finishedAt,
 		stdoutPath,
-		stdoutPath,
 		stderrPath,
 		ti.ID,
 	)
@@ -213,7 +215,11 @@ func (s *TaskInstanceStore) GetForRun(ctx context.Context, workflowRunID int) ([
 			return nil, err
 		}
 
-		ti.State = ParseTaskInstanceState(stateStr)
+		state, err := ParseTaskInstanceState(stateStr)
+		if err != nil {
+			return nil, err
+		}
+		ti.State = state
 
 		if exitCode.Valid {
 			v := int(exitCode.Int64)

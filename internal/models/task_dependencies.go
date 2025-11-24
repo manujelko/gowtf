@@ -23,10 +23,22 @@ type TaskDependenciesStore struct {
 }
 
 func NewTaskDependenciesStore(db *sql.DB) (*TaskDependenciesStore, error) {
-	insertQ, _ := depQueries.ReadFile("queries/dependencies/insert_dependency.sql")
-	getQ, _ := depQueries.ReadFile("queries/dependencies/get_dependencies_for_task.sql")
-	delQ, _ := depQueries.ReadFile("queries/dependencies/delete_dependency.sql")
-	delWfQ, _ := depQueries.ReadFile("queries/dependencies/delete_all_for_workflow.sql")
+	insertQ, err := depQueries.ReadFile("queries/dependencies/insert_dependency.sql")
+	if err != nil {
+		return nil, err
+	}
+	getQ, err := depQueries.ReadFile("queries/dependencies/get_dependencies_for_task.sql")
+	if err != nil {
+		return nil, err
+	}
+	delQ, err := depQueries.ReadFile("queries/dependencies/delete_dependency.sql")
+	if err != nil {
+		return nil, err
+	}
+	delWfQ, err := depQueries.ReadFile("queries/dependencies/delete_all_for_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
 
 	return &TaskDependenciesStore{
 		DB:           db,

@@ -30,10 +30,22 @@ type WorkflowTaskStore struct {
 }
 
 func NewWorkflowTaskStore(db *sql.DB) (*WorkflowTaskStore, error) {
-	insertQ, _ := taskQueries.ReadFile("queries/tasks/insert_task.sql")
-	getQ, _ := taskQueries.ReadFile("queries/tasks/get_tasks_for_workflow.sql")
-	updateQ, _ := taskQueries.ReadFile("queries/tasks/update_task.sql")
-	deleteQ, _ := taskQueries.ReadFile("queries/tasks/delete_task.sql")
+	insertQ, err := taskQueries.ReadFile("queries/tasks/insert_task.sql")
+	if err != nil {
+		return nil, err
+	}
+	getQ, err := taskQueries.ReadFile("queries/tasks/get_tasks_for_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
+	updateQ, err := taskQueries.ReadFile("queries/tasks/update_task.sql")
+	if err != nil {
+		return nil, err
+	}
+	deleteQ, err := taskQueries.ReadFile("queries/tasks/delete_task.sql")
+	if err != nil {
+		return nil, err
+	}
 
 	return &WorkflowTaskStore{
 		DB:        db,

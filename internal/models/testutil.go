@@ -20,7 +20,7 @@ func NewTestDB(t *testing.T) *sql.DB {
 	}
 	path := tmp.Name()
 
-	// Close the hanlde so SQLite can open it
+	// Close the handle so SQLite can open it
 	tmp.Close()
 
 	// Remove the DB file after the test

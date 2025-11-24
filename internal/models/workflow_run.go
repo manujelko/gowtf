@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"fmt"
 	"time"
 )
 
@@ -31,13 +32,13 @@ func (s WorkflowRunStatus) String() string {
 	return name
 }
 
-func ParseWorkflowRunStatus(str string) WorkflowRunStatus {
+func ParseWorkflowRunStatus(str string) (WorkflowRunStatus, error) {
 	for k, v := range workflowRunStatusNames {
 		if v == str {
-			return k
+			return k, nil
 		}
 	}
-	panic("unknown WorkflowRunStatus: " + str)
+	return 0, fmt.Errorf("unknown WorkflowRunStatus: %q", str)
 }
 
 type WorkflowRun struct {
@@ -118,7 +119,11 @@ func (s *WorkflowRunStore) GetByID(ctx context.Context, id int) (*WorkflowRun, e
 		return nil, err
 	}
 
-	wr.Status = ParseWorkflowRunStatus(statusStr)
+	status, err := ParseWorkflowRunStatus(statusStr)
+	if err != nil {
+		return nil, err
+	}
+	wr.Status = status
 
 	if finished.Valid {
 		t := finished.Time
@@ -149,7 +154,11 @@ func (s *WorkflowRunStore) GetLatestForWorkflow(ctx context.Context, workflowID 
 		return nil, err
 	}
 
-	wr.Status = ParseWorkflowRunStatus(statusStr)
+	status, err := ParseWorkflowRunStatus(statusStr)
+	if err != nil {
+		return nil, err
+	}
+	wr.Status = status
 
 	if finished.Valid {
 		t := finished.Time

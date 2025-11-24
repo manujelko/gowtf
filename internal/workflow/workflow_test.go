@@ -252,6 +252,35 @@ func TestValidation_MissingSchedule(t *testing.T) {
 	}
 }
 
+func TestValidation_InvalidSchedule(t *testing.T) {
+	// Create a temporary workflow with invalid schedule
+	wf := &Workflow{
+		Name:     "test",
+		Schedule: "invalid cron",
+		Tasks: []Task{
+			{Name: "task1", Script: "echo hi"},
+		},
+	}
+
+	err := validateWorkflow(wf)
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid schedule format") {
+		t.Fatalf("expected invalid schedule format error, got: %v", err)
+	}
+
+	// Test with wrong number of fields
+	wf.Schedule = "* * *"
+	err = validateWorkflow(wf)
+	if err == nil {
+		t.Fatal("expected validation error for wrong number of fields but got nil")
+	}
+	if !strings.Contains(err.Error(), "must have exactly 5 space-separated fields") {
+		t.Fatalf("expected 5 fields error, got: %v", err)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

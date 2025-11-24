@@ -3,6 +3,7 @@ package workflow
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -15,6 +16,8 @@ func validateWorkflow(wf *Workflow) error {
 
 	if wf.Schedule == "" {
 		errs = append(errs, fmt.Sprintf("workflow %q: schedule is required", wf.Name))
+	} else if err := validateSchedule(wf.Schedule); err != nil {
+		errs = append(errs, fmt.Sprintf("workflow %q: invalid schedule format: %v", wf.Name, err))
 	}
 
 	if len(wf.Tasks) == 0 {
@@ -129,6 +132,26 @@ func detectCycles(tasks []Task) error {
 	for node := range graph {
 		if err := dfs(node); err != nil {
 			return err
+		}
+	}
+
+	return nil
+}
+
+func validateSchedule(schedule string) error {
+	// Cron format: 5 space-separated fields (minute hour day month weekday)
+	fields := strings.Fields(schedule)
+	if len(fields) != 5 {
+		return fmt.Errorf("schedule must have exactly 5 space-separated fields (minute hour day month weekday), got %d", len(fields))
+	}
+
+	// Basic validation: each field should contain valid cron characters
+	// Valid characters: digits, *, -, /, , (comma)
+	cronFieldPattern := regexp.MustCompile(`^[\d\*\/\-,]+$`)
+	for i, field := range fields {
+		fieldNames := []string{"minute", "hour", "day", "month", "weekday"}
+		if !cronFieldPattern.MatchString(field) {
+			return fmt.Errorf("invalid %s field: %q (must contain only digits, *, -, /, or commas)", fieldNames[i], field)
 		}
 	}
 
