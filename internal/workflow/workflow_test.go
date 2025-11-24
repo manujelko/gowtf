@@ -65,7 +65,7 @@ func TestLoadComplex(t *testing.T) {
 		i              int
 		name           string
 		deps           []string
-		when           string
+		condition      string
 		scriptContains []string
 		retries        int
 		retryDelay     string
@@ -97,8 +97,8 @@ func TestLoadComplex(t *testing.T) {
 		},
 		{
 			i: 3, name: "validate_data",
-			deps: []string{"fetch_users", "fetch_orders", "fetch_products"},
-			when: "all_upstream.success",
+			deps:      []string{"fetch_users", "fetch_orders", "fetch_products"},
+			condition: "all_upstream.success",
 			scriptContains: []string{
 				"python validate.py",
 				"--users $DATA_DIR/users.json",
@@ -108,8 +108,8 @@ func TestLoadComplex(t *testing.T) {
 		},
 		{
 			i: 4, name: "send_alert",
-			deps: []string{"validate_data"},
-			when: "validate_data.failed",
+			deps:      []string{"validate_data"},
+			condition: "validate_data.failed",
 			scriptContains: []string{
 				"./alert.sh",
 				"Validation failed for ETL on $DATE",
@@ -117,8 +117,8 @@ func TestLoadComplex(t *testing.T) {
 		},
 		{
 			i: 5, name: "transform_data",
-			deps: []string{"validate_data"},
-			when: "validate_data.success",
+			deps:      []string{"validate_data"},
+			condition: "validate_data.success",
 			scriptContains: []string{
 				"python transform.py",
 				"--input-dir $DATA_DIR",
@@ -127,8 +127,8 @@ func TestLoadComplex(t *testing.T) {
 		},
 		{
 			i: 6, name: "load_to_warehouse",
-			deps: []string{"transform_data"},
-			when: "transform_data.success",
+			deps:      []string{"transform_data"},
+			condition: "transform_data.success",
 			scriptContains: []string{
 				"python load.py",
 				"--source $DATA_DIR/clean.json",
@@ -137,8 +137,8 @@ func TestLoadComplex(t *testing.T) {
 		},
 		{
 			i: 7, name: "notify_success",
-			deps: []string{"load_to_warehouse"},
-			when: "load_to_warehouse.success",
+			deps:      []string{"load_to_warehouse"},
+			condition: "load_to_warehouse.success",
 			scriptContains: []string{
 				"./notify.sh",
 				"ETL succeeded for $DATE",
@@ -146,8 +146,8 @@ func TestLoadComplex(t *testing.T) {
 		},
 		{
 			i: 8, name: "notify_failure",
-			deps: []string{"send_alert", "load_to_warehouse"},
-			when: "any_upstream.failed",
+			deps:      []string{"send_alert", "load_to_warehouse"},
+			condition: "any_upstream.failed",
 			scriptContains: []string{
 				"./notify.sh",
 				"ETL failed for $DATE",
@@ -167,8 +167,8 @@ func TestLoadComplex(t *testing.T) {
 				t.Errorf("unexpected dependencies for %s: got %v, want %v", tt.name, task.DependsOn, tt.deps)
 			}
 
-			if task.When != tt.when {
-				t.Errorf("unexpected when for %s: got %q, want %q", tt.name, task.When, tt.when)
+			if task.Condition != tt.condition {
+				t.Errorf("unexpected condition for %s: got %q, want %q", tt.name, task.Condition, tt.condition)
 			}
 
 			for _, frag := range tt.scriptContains {

@@ -1,0 +1,172 @@
+package models
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"time"
+)
+
+type WorkflowRunStatus int
+
+const (
+	RunPending WorkflowRunStatus = iota
+	RunRunning
+	RunSuccess
+	RunFailed
+)
+
+var workflowRunStatusNames = map[WorkflowRunStatus]string{
+	RunPending: "pending",
+	RunRunning: "running",
+	RunSuccess: "success",
+	RunFailed:  "failed",
+}
+
+func (s WorkflowRunStatus) String() string {
+	name, ok := workflowRunStatusNames[s]
+	if !ok {
+		panic("unknown WorkflowRunStatus value")
+	}
+	return name
+}
+
+func ParseWorkflowRunStatus(str string) WorkflowRunStatus {
+	for k, v := range workflowRunStatusNames {
+		if v == str {
+			return k
+		}
+	}
+	panic("unknown WorkflowRunStatus: " + str)
+}
+
+type WorkflowRun struct {
+	ID         int
+	WorkflowID int
+	Status     WorkflowRunStatus
+	StartedAt  time.Time
+	FinishedAt *time.Time
+}
+
+//go:embed queries/workflow_runs/*.sql
+var workflowRunQueries embed.FS
+
+type WorkflowRunStore struct {
+	DB              *sql.DB
+	insertQ         string
+	updateStatusQ   string
+	getByIDQ        string
+	getLatestForWfQ string
+}
+
+func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
+	insertQ, err := workflowRunQueries.ReadFile("queries/workflow_runs/insert_workflow_run.sql")
+	if err != nil {
+		return nil, err
+	}
+	updateStatusQ, err := workflowRunQueries.ReadFile("queries/workflow_runs/update_workflow_run_status.sql")
+	if err != nil {
+		return nil, err
+	}
+	getByIDQ, err := workflowRunQueries.ReadFile("queries/workflow_runs/get_workflow_run.sql")
+	if err != nil {
+		return nil, err
+	}
+	getLatestForWfQ, err := workflowRunQueries.ReadFile("queries/workflow_runs/get_latest_for_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
+
+	return &WorkflowRunStore{
+		DB:              db,
+		insertQ:         string(insertQ),
+		updateStatusQ:   string(updateStatusQ),
+		getByIDQ:        string(getByIDQ),
+		getLatestForWfQ: string(getLatestForWfQ),
+	}, nil
+}
+
+func (s *WorkflowRunStore) Insert(ctx context.Context, workflowID int, status WorkflowRunStatus) (*WorkflowRun, error) {
+	res, err := s.DB.ExecContext(ctx, s.insertQ, workflowID, status.String())
+	if err != nil {
+		return nil, err
+	}
+
+	id64, err := res.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	return s.GetByID(ctx, int(id64))
+}
+
+func (s *WorkflowRunStore) GetByID(ctx context.Context, id int) (*WorkflowRun, error) {
+	var (
+		wr        WorkflowRun
+		statusStr string
+		finished  sql.NullTime
+	)
+
+	err := s.DB.QueryRowContext(ctx, s.getByIDQ, id).Scan(
+		&wr.ID,
+		&wr.WorkflowID,
+		&statusStr,
+		&wr.StartedAt,
+		&finished,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	wr.Status = ParseWorkflowRunStatus(statusStr)
+
+	if finished.Valid {
+		t := finished.Time
+		wr.FinishedAt = &t
+	}
+
+	return &wr, nil
+}
+
+func (s *WorkflowRunStore) GetLatestForWorkflow(ctx context.Context, workflowID int) (*WorkflowRun, error) {
+	var (
+		wr        WorkflowRun
+		statusStr string
+		finished  sql.NullTime
+	)
+
+	err := s.DB.QueryRowContext(ctx, s.getLatestForWfQ, workflowID).Scan(
+		&wr.ID,
+		&wr.WorkflowID,
+		&statusStr,
+		&wr.StartedAt,
+		&finished,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	wr.Status = ParseWorkflowRunStatus(statusStr)
+
+	if finished.Valid {
+		t := finished.Time
+		wr.FinishedAt = &t
+	}
+
+	return &wr, nil
+}
+
+func (s *WorkflowRunStore) UpdateStatus(ctx context.Context, id int, status WorkflowRunStatus, finishedAt *time.Time) error {
+	var finishedAny any
+	if finishedAt != nil {
+		finishedAny = *finishedAt
+	} else {
+		finishedAny = nil
+	}
+
+	_, err := s.DB.ExecContext(ctx, s.updateStatusQ, status.String(), finishedAny, id)
+	return err
+}

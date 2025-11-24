@@ -17,7 +17,7 @@ type Workflow struct {
 type Task struct {
 	Name       string            `yaml:"name"`
 	DependsOn  []string          `yaml:"depends_on,omitempty"`
-	When       string            `yaml:"when,omitempty"`
+	Condition  string            `yaml:"condition,omitempty"`
 	Script     string            `yaml:"script"`
 	Env        map[string]string `yaml:"env,omitempty"`
 	Retries    int               `yaml:"retries,omitempty"`

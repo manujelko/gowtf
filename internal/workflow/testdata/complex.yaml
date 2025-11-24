@@ -30,7 +30,7 @@ tasks:
   # Step 2: Validate data only when ALL fetches succeeded
   - name: validate_data
     depends_on: [fetch_users, fetch_orders, fetch_products]
-    when: all_upstream.success
+    condition: all_upstream.success
     script: |
       python validate.py \
         --users $DATA_DIR/users.json \
@@ -40,14 +40,14 @@ tasks:
   # Step 3: If validation fails, skip the transform and send an alert
   - name: send_alert
     depends_on: [validate_data]
-    when: validate_data.failed
+    condition: validate_data.failed
     script: |
       ./alert.sh "Validation failed for ETL on $DATE"
 
   # Step 4: Otherwise transform data and merge into warehouse
   - name: transform_data
     depends_on: [validate_data]
-    when: validate_data.success
+    condition: validate_data.success
     script: |
       python transform.py \
         --input-dir $DATA_DIR \
@@ -55,7 +55,7 @@ tasks:
 
   - name: load_to_warehouse
     depends_on: [transform_data]
-    when: transform_data.success
+    condition: transform_data.success
     timeout: "10m"
     script: |
       python load.py --source $DATA_DIR/clean.json
@@ -63,14 +63,14 @@ tasks:
   # Step 5: Final notification (only if ETL succeeded)
   - name: notify_success
     depends_on: [load_to_warehouse]
-    when: load_to_warehouse.success
+    condition: load_to_warehouse.success
     script: |
       ./notify.sh "ETL succeeded for $DATE"
 
   # Step 6: Final failure hook (if either validation or load failed)
   - name: notify_failure
     depends_on: [send_alert, load_to_warehouse]
-    when: any_upstream.failed
+    condition: any_upstream.failed
     script: |
       ./notify.sh "ETL failed for $DATE"
 
