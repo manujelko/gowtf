@@ -109,3 +109,138 @@ func TestWorkflowStore_Update(t *testing.T) {
 		t.Fatalf("expected UpdatedAt to be set")
 	}
 }
+
+func TestWorkflowStore_Delete(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wf := &Workflow{
+		Name:     "test-workflow",
+		Schedule: "* * * * *",
+		Hash:     "test-hash",
+		Enabled:  true,
+	}
+
+	err = store.Insert(ctx, wf)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	err = store.Delete(ctx, wf.ID)
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	got, err := store.GetByName(ctx, "test-workflow")
+	if err != nil {
+		t.Fatalf("GetByName failed: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected workflow to be deleted, got %v", got)
+	}
+}
+
+func TestWorkflowStore_InsertTx(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback()
+
+	wf := &Workflow{
+		Name:     "test-workflow",
+		Schedule: "* * * * *",
+		Env: map[string]string{
+			"TEST_VAR": "test-value",
+		},
+		Hash:    "test-hash",
+		Enabled: true,
+	}
+
+	err = store.InsertTx(ctx, tx, wf)
+	if err != nil {
+		t.Fatalf("InsertTx failed: %v", err)
+	}
+
+	if wf.ID == 0 {
+		t.Fatalf("expected ID to be set, got 0")
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	got, err := store.GetByName(ctx, "test-workflow")
+	if err != nil {
+		t.Fatalf("GetByName failed: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected workflow to exist")
+	}
+	if got.ID != wf.ID {
+		t.Fatalf("expected ID %d, got %d", wf.ID, got.ID)
+	}
+}
+
+func TestWorkflowStore_UpdateTx(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wf := &Workflow{
+		Name:     "test-workflow",
+		Schedule: "* * * * *",
+		Hash:     "test-hash",
+		Enabled:  true,
+	}
+
+	err = store.Insert(ctx, wf)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback()
+
+	wf.Schedule = "0 * * * *"
+	wf.Hash = "updated-hash"
+
+	err = store.UpdateTx(ctx, tx, wf)
+	if err != nil {
+		t.Fatalf("UpdateTx failed: %v", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	got, err := store.GetByName(ctx, "test-workflow")
+	if err != nil {
+		t.Fatalf("GetByName failed: %v", err)
+	}
+	if got.Schedule != "0 * * * *" {
+		t.Fatalf("expected Schedule %q, got %q", "0 * * * *", got.Schedule)
+	}
+	if got.Hash != "updated-hash" {
+		t.Fatalf("expected Hash %q, got %q", "updated-hash", got.Hash)
+	}
+}

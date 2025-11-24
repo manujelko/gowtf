@@ -26,6 +26,7 @@ type WorkflowStore struct {
 	insertQ string
 	getByQ  string
 	updateQ string
+	deleteQ string
 }
 
 func NewWorkflowStore(db *sql.DB) (*WorkflowStore, error) {
@@ -41,12 +42,17 @@ func NewWorkflowStore(db *sql.DB) (*WorkflowStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	deleteQ, err := workflowQueries.ReadFile("queries/delete_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
 
 	return &WorkflowStore{
 		DB:      db,
 		insertQ: string(insertQ),
 		getByQ:  string(getByQ),
 		updateQ: string(updateQ),
+		deleteQ: string(deleteQ),
 	}, nil
 }
 
@@ -121,6 +127,64 @@ func (s *WorkflowStore) Update(ctx context.Context, w *Workflow) error {
 	}
 
 	_, err = s.DB.ExecContext(
+		ctx,
+		s.updateQ,
+		w.Name,
+		w.Schedule,
+		envJSON,
+		w.Hash,
+		boolToInt(w.Enabled),
+		w.ID,
+	)
+	return err
+}
+
+func (s *WorkflowStore) Delete(ctx context.Context, id int) error {
+	_, err := s.DB.ExecContext(ctx, s.deleteQ, id)
+	return err
+}
+
+// InsertTx inserts a workflow within a transaction
+func (s *WorkflowStore) InsertTx(ctx context.Context, tx *sql.Tx, w *Workflow) error {
+	envJSON, err := encodeEnv(w.Env)
+	if err != nil {
+		return err
+	}
+
+	res, err := tx.ExecContext(
+		ctx,
+		s.insertQ,
+		w.Name,
+		w.Schedule,
+		envJSON,
+		w.Hash,
+		boolToInt(w.Enabled),
+	)
+	if err != nil {
+		return err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	w.ID = int(id)
+	return nil
+}
+
+// UpdateTx updates a workflow within a transaction
+func (s *WorkflowStore) UpdateTx(ctx context.Context, tx *sql.Tx, w *Workflow) error {
+	if w.ID == 0 {
+		return errors.New("cannot update workflow without ID")
+	}
+
+	envJSON, err := encodeEnv(w.Env)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(
 		ctx,
 		s.updateQ,
 		w.Name,

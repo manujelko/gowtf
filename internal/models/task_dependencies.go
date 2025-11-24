@@ -82,3 +82,15 @@ func (s *TaskDependenciesStore) DeleteForWorkflow(ctx context.Context, workflowI
 	_, err := s.DB.ExecContext(ctx, s.deleteForWfQ, workflowID)
 	return err
 }
+
+// InsertTx inserts a dependency within a transaction
+func (s *TaskDependenciesStore) InsertTx(ctx context.Context, tx *sql.Tx, taskID, dependsOn int) error {
+	_, err := tx.ExecContext(ctx, s.insertQ, taskID, dependsOn)
+	return err
+}
+
+// DeleteForWorkflowTx deletes all dependencies for a workflow within a transaction
+func (s *TaskDependenciesStore) DeleteForWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID int) error {
+	_, err := tx.ExecContext(ctx, s.deleteForWfQ, workflowID)
+	return err
+}

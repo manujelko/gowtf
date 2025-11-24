@@ -89,3 +89,85 @@ func TestTaskDependenciesStore_DeleteForWorkflow(t *testing.T) {
 		t.Fatalf("expected 0 dependencies, got %d", len(got))
 	}
 }
+
+func TestTaskDependenciesStore_InsertTx(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wfID := insertTestWorkflow(t, db, "wf1")
+	taskID := insertTestTask(t, db, wfID, "test-task")
+	dependsOnID := insertTestTask(t, db, wfID, "test-task-2")
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback()
+
+	err = store.InsertTx(ctx, tx, taskID, dependsOnID)
+	if err != nil {
+		t.Fatalf("InsertTx failed: %v", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	got, err := store.GetForTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetForTask failed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 dependency, got %d", len(got))
+	}
+	if got[0] != dependsOnID {
+		t.Fatalf("expected dependency %d, got %d", dependsOnID, got[0])
+	}
+}
+
+func TestTaskDependenciesStore_DeleteForWorkflowTx(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wfID := insertTestWorkflow(t, db, "wf1")
+	taskID := insertTestTask(t, db, wfID, "test-task")
+	dependsOnID := insertTestTask(t, db, wfID, "test-task-2")
+
+	err = store.Insert(ctx, taskID, dependsOnID)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback()
+
+	err = store.DeleteForWorkflowTx(ctx, tx, wfID)
+	if err != nil {
+		t.Fatalf("DeleteForWorkflowTx failed: %v", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	got, err := store.GetForTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetForTask failed: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected 0 dependencies, got %d", len(got))
+	}
+}

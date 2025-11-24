@@ -146,3 +146,166 @@ func TestWorkflowTaskStore_Delete(t *testing.T) {
 		t.Fatalf("expected 0 tasks, got %d", len(got))
 	}
 }
+
+func TestWorkflowTaskStore_DeleteForWorkflow(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wfID := insertTestWorkflow(t, db, "wf1")
+
+	task1 := &WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "test-task-1",
+		Script:     "echo hi",
+	}
+	task2 := &WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "test-task-2",
+		Script:     "echo hello",
+	}
+
+	err = store.Insert(ctx, task1)
+	if err != nil {
+		t.Fatalf("Insert task1 failed: %v", err)
+	}
+	err = store.Insert(ctx, task2)
+	if err != nil {
+		t.Fatalf("Insert task2 failed: %v", err)
+	}
+
+	err = store.DeleteForWorkflow(ctx, wfID)
+	if err != nil {
+		t.Fatalf("DeleteForWorkflow failed: %v", err)
+	}
+
+	got, err := store.GetForWorkflow(ctx, wfID)
+	if err != nil {
+		t.Fatalf("GetForWorkflow failed: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("expected 0 tasks, got %d", len(got))
+	}
+}
+
+func TestWorkflowTaskStore_InsertTx(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wfID := insertTestWorkflow(t, db, "wf1")
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback()
+
+	task := &WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "test-task",
+		Script:     "echo hi",
+		Retries:    3,
+		RetryDelay: "30s",
+		Timeout:    "2m",
+		Condition:  "all_upstream.success",
+		Env: map[string]string{
+			"TEST_VAR": "test-value",
+		},
+	}
+
+	err = store.InsertTx(ctx, tx, task)
+	if err != nil {
+		t.Fatalf("InsertTx failed: %v", err)
+	}
+
+	if task.ID == 0 {
+		t.Fatalf("expected ID to be set, got 0")
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	got, err := store.GetForWorkflow(ctx, wfID)
+	if err != nil {
+		t.Fatalf("GetForWorkflow failed: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(got))
+	}
+	if got[0].ID != task.ID {
+		t.Fatalf("expected ID %d, got %d", task.ID, got[0].ID)
+	}
+	if got[0].Name != task.Name {
+		t.Fatalf("expected Name %q, got %q", task.Name, got[0].Name)
+	}
+	if got[0].Retries != task.Retries {
+		t.Fatalf("expected Retries %d, got %d", task.Retries, got[0].Retries)
+	}
+}
+
+func TestWorkflowTaskStore_DeleteForWorkflowTx(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wfID := insertTestWorkflow(t, db, "wf1")
+
+	task1 := &WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "test-task-1",
+		Script:     "echo hi",
+	}
+	task2 := &WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "test-task-2",
+		Script:     "echo hello",
+	}
+
+	err = store.Insert(ctx, task1)
+	if err != nil {
+		t.Fatalf("Insert task1 failed: %v", err)
+	}
+	err = store.Insert(ctx, task2)
+	if err != nil {
+		t.Fatalf("Insert task2 failed: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback()
+
+	err = store.DeleteForWorkflowTx(ctx, tx, wfID)
+	if err != nil {
+		t.Fatalf("DeleteForWorkflowTx failed: %v", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+
+	got, err := store.GetForWorkflow(ctx, wfID)
+	if err != nil {
+		t.Fatalf("GetForWorkflow failed: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("expected 0 tasks, got %d", len(got))
+	}
+}

@@ -22,11 +22,12 @@ type WorkflowTask struct {
 }
 
 type WorkflowTaskStore struct {
-	DB        *sql.DB
-	insertQ   string
-	getForWfQ string
-	updateQ   string
-	deleteQ   string
+	DB           *sql.DB
+	insertQ      string
+	getForWfQ    string
+	updateQ      string
+	deleteQ      string
+	deleteForWfQ string
 }
 
 func NewWorkflowTaskStore(db *sql.DB) (*WorkflowTaskStore, error) {
@@ -46,13 +47,18 @@ func NewWorkflowTaskStore(db *sql.DB) (*WorkflowTaskStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	deleteForWfQ, err := taskQueries.ReadFile("queries/tasks/delete_all_for_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
 
 	return &WorkflowTaskStore{
-		DB:        db,
-		insertQ:   string(insertQ),
-		getForWfQ: string(getQ),
-		updateQ:   string(updateQ),
-		deleteQ:   string(deleteQ),
+		DB:           db,
+		insertQ:      string(insertQ),
+		getForWfQ:    string(getQ),
+		updateQ:      string(updateQ),
+		deleteQ:      string(deleteQ),
+		deleteForWfQ: string(deleteForWfQ),
 	}, nil
 }
 
@@ -146,5 +152,45 @@ func (s *WorkflowTaskStore) Update(ctx context.Context, t *WorkflowTask) error {
 
 func (s *WorkflowTaskStore) Delete(ctx context.Context, id int) error {
 	_, err := s.DB.ExecContext(ctx, s.deleteQ, id)
+	return err
+}
+
+func (s *WorkflowTaskStore) DeleteForWorkflow(ctx context.Context, workflowID int) error {
+	_, err := s.DB.ExecContext(ctx, s.deleteForWfQ, workflowID)
+	return err
+}
+
+// InsertTx inserts a task within a transaction
+func (s *WorkflowTaskStore) InsertTx(ctx context.Context, tx *sql.Tx, t *WorkflowTask) error {
+	envJSON, err := encodeEnv(t.Env)
+	if err != nil {
+		return err
+	}
+
+	res, err := tx.ExecContext(ctx, s.insertQ,
+		t.WorkflowID,
+		t.Name,
+		t.Script,
+		t.Retries,
+		t.RetryDelay,
+		t.Timeout,
+		t.Condition,
+		envJSON,
+	)
+	if err != nil {
+		return err
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	t.ID = int(id)
+	return nil
+}
+
+// DeleteForWorkflowTx deletes all tasks for a workflow within a transaction
+func (s *WorkflowTaskStore) DeleteForWorkflowTx(ctx context.Context, tx *sql.Tx, workflowID int) error {
+	_, err := tx.ExecContext(ctx, s.deleteForWfQ, workflowID)
 	return err
 }
