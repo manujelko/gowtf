@@ -13,7 +13,7 @@ func TestWorkflowTaskStore_InsertAndGetForWorkflow(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	task := &WorkflowTask{
 		WorkflowID: wfID,
@@ -68,7 +68,7 @@ func TestWorkflowTaskStore_Update(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	task := &WorkflowTask{
 		WorkflowID: wfID,
@@ -119,7 +119,7 @@ func TestWorkflowTaskStore_Delete(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	task := &WorkflowTask{
 		WorkflowID: wfID,
@@ -155,7 +155,7 @@ func TestWorkflowTaskStore_DeleteForWorkflow(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	task1 := &WorkflowTask{
 		WorkflowID: wfID,
@@ -200,7 +200,7 @@ func TestWorkflowTaskStore_InsertTx(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -262,7 +262,7 @@ func TestWorkflowTaskStore_DeleteForWorkflowTx(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	task1 := &WorkflowTask{
 		WorkflowID: wfID,
@@ -307,5 +307,67 @@ func TestWorkflowTaskStore_DeleteForWorkflowTx(t *testing.T) {
 
 	if len(got) != 0 {
 		t.Fatalf("expected 0 tasks, got %d", len(got))
+	}
+}
+
+func TestWorkflowTaskStore_GetByNameForWorkflow(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wfID := InsertTestWorkflow(t, db, "wf1")
+
+	task := &WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "test-task",
+		Script:     "echo hi",
+		Retries:    3,
+		RetryDelay: "30s",
+		Timeout:    "2m",
+		Condition:  "all_upstream.success",
+	}
+
+	err = store.Insert(ctx, task)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	got, err := store.GetByNameForWorkflow(ctx, wfID, "test-task")
+	if err != nil {
+		t.Fatalf("GetByNameForWorkflow failed: %v", err)
+	}
+
+	if got == nil {
+		t.Fatalf("expected task, got nil")
+	}
+	if got.ID != task.ID {
+		t.Fatalf("expected ID %d, got %d", task.ID, got.ID)
+	}
+	if got.WorkflowID != wfID {
+		t.Fatalf("expected WorkflowID %d, got %d", wfID, got.WorkflowID)
+	}
+	if got.Name != "test-task" {
+		t.Fatalf("expected Name %q, got %q", "test-task", got.Name)
+	}
+	if got.Script != task.Script {
+		t.Fatalf("expected Script %q, got %q", task.Script, got.Script)
+	}
+	if got.Retries != task.Retries {
+		t.Fatalf("expected Retries %d, got %d", task.Retries, got.Retries)
+	}
+	if got.Condition != task.Condition {
+		t.Fatalf("expected Condition %q, got %q", task.Condition, got.Condition)
+	}
+
+	// Test non-existent task
+	got, err = store.GetByNameForWorkflow(ctx, wfID, "non-existent")
+	if err != nil {
+		t.Fatalf("GetByNameForWorkflow failed: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil for non-existent task, got %v", got)
 	}
 }

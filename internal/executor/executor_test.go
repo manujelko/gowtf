@@ -1,0 +1,577 @@
+package executor
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/manujelko/gowtf/internal/models"
+	"github.com/manujelko/gowtf/internal/scheduler"
+)
+
+func TestExecutor_HandleWorkflowRun(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	executor, err := NewExecutor(db, events)
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start executor in background
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	// Give executor time to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Create test workflow and run
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+	taskID := models.InsertTestTask(t, db, wfID, "test-task")
+
+	// Create task instance
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	taskInstance := &models.TaskInstance{
+		WorkflowRunID: wfRunID,
+		TaskID:        taskID,
+		State:         models.TaskStatePending,
+		Attempt:       1,
+	}
+	if err := taskInstanceStore.Insert(ctx, taskInstance); err != nil {
+		t.Fatalf("Insert task instance failed: %v", err)
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify task instance was processed
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 task instance, got %d", len(instances))
+	}
+
+	// Task should be in a terminal state (success, failed, or skipped)
+	if instances[0].State != models.TaskStateSuccess &&
+		instances[0].State != models.TaskStateFailed &&
+		instances[0].State != models.TaskStateSkipped {
+		t.Fatalf("expected task to be in terminal state, got %v", instances[0].State)
+	}
+
+	// Verify workflow run status
+	workflowRunStore, err := models.NewWorkflowRunStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowRunStore failed: %v", err)
+	}
+
+	run, err := workflowRunStore.GetByID(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+
+	if run.Status != models.RunSuccess && run.Status != models.RunFailed {
+		t.Fatalf("expected workflow run to be in terminal state, got %v", run.Status)
+	}
+}
+
+func TestExecutor_DependencyResolution(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	executor, err := NewExecutor(db, events)
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with two tasks: task1 -> task2
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+	task1ID := models.InsertTestTask(t, db, wfID, "task1")
+	task2ID := models.InsertTestTask(t, db, wfID, "task2")
+
+	// Create dependency: task2 depends on task1
+	depsStore, err := models.NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, task2ID, task1ID); err != nil {
+		t.Fatalf("Insert dependency failed: %v", err)
+	}
+
+	// Create workflow run
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instances
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	ti1 := &models.TaskInstance{
+		WorkflowRunID: wfRunID,
+		TaskID:        task1ID,
+		State:         models.TaskStatePending,
+		Attempt:       1,
+	}
+	if err := taskInstanceStore.Insert(ctx, ti1); err != nil {
+		t.Fatalf("Insert task1 instance failed: %v", err)
+	}
+
+	ti2 := &models.TaskInstance{
+		WorkflowRunID: wfRunID,
+		TaskID:        task2ID,
+		State:         models.TaskStatePending,
+		Attempt:       1,
+	}
+	if err := taskInstanceStore.Insert(ctx, ti2); err != nil {
+		t.Fatalf("Insert task2 instance failed: %v", err)
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(1 * time.Second)
+
+	// Verify task1 completed first
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	var task1Instance, task2Instance *models.TaskInstance
+	for _, ti := range instances {
+		if ti.TaskID == task1ID {
+			task1Instance = ti
+		}
+		if ti.TaskID == task2ID {
+			task2Instance = ti
+		}
+	}
+
+	if task1Instance == nil || task2Instance == nil {
+		t.Fatalf("task instances not found")
+	}
+
+	// Task1 should be in terminal state
+	if task1Instance.State != models.TaskStateSuccess &&
+		task1Instance.State != models.TaskStateFailed &&
+		task1Instance.State != models.TaskStateSkipped {
+		t.Fatalf("task1 should be in terminal state, got %v", task1Instance.State)
+	}
+
+	// Task2 should also be processed (after task1 completes)
+	if task2Instance.State != models.TaskStateSuccess &&
+		task2Instance.State != models.TaskStateFailed &&
+		task2Instance.State != models.TaskStateSkipped {
+		t.Fatalf("task2 should be in terminal state, got %v", task2Instance.State)
+	}
+}
+
+func TestExecutor_ConditionEvaluation_AllUpstreamSuccess(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	executor, err := NewExecutor(db, events)
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with tasks: task1, task2 -> task3 (task3 requires all_upstream.success)
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+	task1ID := models.InsertTestTask(t, db, wfID, "task1")
+	task2ID := models.InsertTestTask(t, db, wfID, "task2")
+	task3ID := models.InsertTestTask(t, db, wfID, "task3")
+
+	// Set condition on task3
+	taskStore, err := models.NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+
+	tasks, err := taskStore.GetForWorkflow(ctx, wfID)
+	if err != nil {
+		t.Fatalf("GetForWorkflow failed: %v", err)
+	}
+
+	var task3 *models.WorkflowTask
+	for _, task := range tasks {
+		if task.ID == task3ID {
+			task3 = task
+			break
+		}
+	}
+	if task3 == nil {
+		t.Fatalf("task3 not found")
+	}
+
+	task3.Condition = "all_upstream.success"
+	if err := taskStore.Update(ctx, task3); err != nil {
+		t.Fatalf("Update task3 failed: %v", err)
+	}
+
+	// Create dependencies: task3 depends on task1 and task2
+	depsStore, err := models.NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, task3ID, task1ID); err != nil {
+		t.Fatalf("Insert dependency failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, task3ID, task2ID); err != nil {
+		t.Fatalf("Insert dependency failed: %v", err)
+	}
+
+	// Create workflow run
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instances
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	for _, taskID := range []int{task1ID, task2ID, task3ID} {
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        taskID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(1 * time.Second)
+
+	// Verify all tasks completed
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	var task3Instance *models.TaskInstance
+	for _, ti := range instances {
+		if ti.TaskID == task3ID {
+			task3Instance = ti
+			break
+		}
+	}
+
+	if task3Instance == nil {
+		t.Fatalf("task3 instance not found")
+	}
+
+	// Task3 should have run (all dependencies succeeded)
+	if task3Instance.State == models.TaskStateSkipped {
+		t.Fatalf("task3 should not be skipped when all dependencies succeed")
+	}
+}
+
+func TestExecutor_ConditionEvaluation_TaskNameSuccess(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	executor, err := NewExecutor(db, events)
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with tasks: task1 -> task2 (task2 requires task1.success)
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+	task1ID := models.InsertTestTask(t, db, wfID, "task1")
+	task2ID := models.InsertTestTask(t, db, wfID, "task2")
+
+	// Set condition on task2
+	taskStore, err := models.NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+
+	tasks, err := taskStore.GetForWorkflow(ctx, wfID)
+	if err != nil {
+		t.Fatalf("GetForWorkflow failed: %v", err)
+	}
+
+	var task2 *models.WorkflowTask
+	for _, task := range tasks {
+		if task.ID == task2ID {
+			task2 = task
+			break
+		}
+	}
+	if task2 == nil {
+		t.Fatalf("task2 not found")
+	}
+
+	task2.Condition = "task1.success"
+	if err := taskStore.Update(ctx, task2); err != nil {
+		t.Fatalf("Update task2 failed: %v", err)
+	}
+
+	// Create dependency: task2 depends on task1
+	depsStore, err := models.NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, task2ID, task1ID); err != nil {
+		t.Fatalf("Insert dependency failed: %v", err)
+	}
+
+	// Create workflow run
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instances
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	for _, taskID := range []int{task1ID, task2ID} {
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        taskID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(1 * time.Second)
+
+	// Verify task2 ran (task1 succeeded)
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	var task2Instance *models.TaskInstance
+	for _, ti := range instances {
+		if ti.TaskID == task2ID {
+			task2Instance = ti
+			break
+		}
+	}
+
+	if task2Instance == nil {
+		t.Fatalf("task2 instance not found")
+	}
+
+	// Task2 should have run (task1 succeeded)
+	if task2Instance.State == models.TaskStateSkipped {
+		t.Fatalf("task2 should not be skipped when task1 succeeds")
+	}
+}
+
+func TestExecutor_TaskStateTransitions(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	executor, err := NewExecutor(db, events)
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create simple workflow
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+	taskID := models.InsertTestTask(t, db, wfID, "test-task")
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instance
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	ti := &models.TaskInstance{
+		WorkflowRunID: wfRunID,
+		TaskID:        taskID,
+		State:         models.TaskStatePending,
+		Attempt:       1,
+	}
+	if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+		t.Fatalf("Insert task instance failed: %v", err)
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify state transitions occurred
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	if len(instances) != 1 {
+		t.Fatalf("expected 1 task instance, got %d", len(instances))
+	}
+
+	// Task should have transitioned through states and ended in a terminal state
+	if instances[0].State != models.TaskStateSuccess &&
+		instances[0].State != models.TaskStateFailed &&
+		instances[0].State != models.TaskStateSkipped {
+		t.Fatalf("expected task to be in terminal state, got %v", instances[0].State)
+	}
+
+	// If successful, verify timestamps were set
+	if instances[0].State == models.TaskStateSuccess {
+		if instances[0].StartedAt == nil {
+			t.Fatalf("expected StartedAt to be set")
+		}
+		if instances[0].FinishedAt == nil {
+			t.Fatalf("expected FinishedAt to be set")
+		}
+		if instances[0].ExitCode == nil {
+			t.Fatalf("expected ExitCode to be set")
+		}
+	}
+}
+
+func TestExecutor_WorkflowRunStatusUpdate(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	executor, err := NewExecutor(db, events)
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with single task
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+	taskID := models.InsertTestTask(t, db, wfID, "test-task")
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instance
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	ti := &models.TaskInstance{
+		WorkflowRunID: wfRunID,
+		TaskID:        taskID,
+		State:         models.TaskStatePending,
+		Attempt:       1,
+	}
+	if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+		t.Fatalf("Insert task instance failed: %v", err)
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(1 * time.Second)
+
+	// Verify workflow run status was updated
+	workflowRunStore, err := models.NewWorkflowRunStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowRunStore failed: %v", err)
+	}
+
+	run, err := workflowRunStore.GetByID(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+
+	// Workflow run should be in a terminal state
+	if run.Status != models.RunSuccess && run.Status != models.RunFailed {
+		t.Fatalf("expected workflow run to be in terminal state, got %v", run.Status)
+	}
+
+	// FinishedAt should be set
+	if run.FinishedAt == nil {
+		t.Fatalf("expected FinishedAt to be set")
+	}
+}

@@ -13,9 +13,9 @@ func TestTaskDependenciesStore_InsertAndGetForTask(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
-	taskID := insertTestTask(t, db, wfID, "test-task")
-	dependsOnID := insertTestTask(t, db, wfID, "test-task-2")
+	wfID := InsertTestWorkflow(t, db, "wf1")
+	taskID := InsertTestTask(t, db, wfID, "test-task")
+	dependsOnID := InsertTestTask(t, db, wfID, "test-task-2")
 
 	err = store.Insert(ctx, taskID, dependsOnID)
 	if err != nil {
@@ -41,9 +41,9 @@ func TestTaskDependenciesStore_Delete(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
-	taskID := insertTestTask(t, db, wfID, "test-task")
-	dependsOnID := insertTestTask(t, db, wfID, "test-task-2")
+	wfID := InsertTestWorkflow(t, db, "wf1")
+	taskID := InsertTestTask(t, db, wfID, "test-task")
+	dependsOnID := InsertTestTask(t, db, wfID, "test-task-2")
 
 	err = store.Insert(ctx, taskID, dependsOnID)
 	if err != nil {
@@ -70,9 +70,9 @@ func TestTaskDependenciesStore_DeleteForWorkflow(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
-	taskID := insertTestTask(t, db, wfID, "test-task")
-	dependsOnID := insertTestTask(t, db, wfID, "test-task-2")
+	wfID := InsertTestWorkflow(t, db, "wf1")
+	taskID := InsertTestTask(t, db, wfID, "test-task")
+	dependsOnID := InsertTestTask(t, db, wfID, "test-task-2")
 	err = store.Insert(ctx, taskID, dependsOnID)
 	if err != nil {
 		t.Fatalf("Insert failed: %v", err)
@@ -98,9 +98,9 @@ func TestTaskDependenciesStore_InsertTx(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
-	taskID := insertTestTask(t, db, wfID, "test-task")
-	dependsOnID := insertTestTask(t, db, wfID, "test-task-2")
+	wfID := InsertTestWorkflow(t, db, "wf1")
+	taskID := InsertTestTask(t, db, wfID, "test-task")
+	dependsOnID := InsertTestTask(t, db, wfID, "test-task-2")
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -138,9 +138,9 @@ func TestTaskDependenciesStore_DeleteForWorkflowTx(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
-	taskID := insertTestTask(t, db, wfID, "test-task")
-	dependsOnID := insertTestTask(t, db, wfID, "test-task-2")
+	wfID := InsertTestWorkflow(t, db, "wf1")
+	taskID := InsertTestTask(t, db, wfID, "test-task")
+	dependsOnID := InsertTestTask(t, db, wfID, "test-task-2")
 
 	err = store.Insert(ctx, taskID, dependsOnID)
 	if err != nil {

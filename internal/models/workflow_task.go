@@ -22,12 +22,13 @@ type WorkflowTask struct {
 }
 
 type WorkflowTaskStore struct {
-	DB           *sql.DB
-	insertQ      string
-	getForWfQ    string
-	updateQ      string
-	deleteQ      string
-	deleteForWfQ string
+	DB              *sql.DB
+	insertQ         string
+	getForWfQ       string
+	getByNameForWfQ string
+	updateQ         string
+	deleteQ         string
+	deleteForWfQ    string
 }
 
 func NewWorkflowTaskStore(db *sql.DB) (*WorkflowTaskStore, error) {
@@ -36,6 +37,10 @@ func NewWorkflowTaskStore(db *sql.DB) (*WorkflowTaskStore, error) {
 		return nil, err
 	}
 	getQ, err := taskQueries.ReadFile("queries/tasks/get_tasks_for_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
+	getByNameQ, err := taskQueries.ReadFile("queries/tasks/get_by_name_for_workflow.sql")
 	if err != nil {
 		return nil, err
 	}
@@ -53,12 +58,13 @@ func NewWorkflowTaskStore(db *sql.DB) (*WorkflowTaskStore, error) {
 	}
 
 	return &WorkflowTaskStore{
-		DB:           db,
-		insertQ:      string(insertQ),
-		getForWfQ:    string(getQ),
-		updateQ:      string(updateQ),
-		deleteQ:      string(deleteQ),
-		deleteForWfQ: string(deleteForWfQ),
+		DB:              db,
+		insertQ:         string(insertQ),
+		getForWfQ:       string(getQ),
+		getByNameForWfQ: string(getByNameQ),
+		updateQ:         string(updateQ),
+		deleteQ:         string(deleteQ),
+		deleteForWfQ:    string(deleteForWfQ),
 	}, nil
 }
 
@@ -101,8 +107,11 @@ func (s *WorkflowTaskStore) GetForWorkflow(ctx context.Context, workflowID int) 
 
 	for rows.Next() {
 		var (
-			t       WorkflowTask
-			envJSON sql.NullString
+			t          WorkflowTask
+			retryDelay sql.NullString
+			timeout    sql.NullString
+			condition  sql.NullString
+			envJSON    sql.NullString
 		)
 
 		err := rows.Scan(
@@ -111,13 +120,23 @@ func (s *WorkflowTaskStore) GetForWorkflow(ctx context.Context, workflowID int) 
 			&t.Name,
 			&t.Script,
 			&t.Retries,
-			&t.RetryDelay,
-			&t.Timeout,
-			&t.Condition,
+			&retryDelay,
+			&timeout,
+			&condition,
 			&envJSON,
 		)
 		if err != nil {
 			return nil, err
+		}
+
+		if retryDelay.Valid {
+			t.RetryDelay = retryDelay.String
+		}
+		if timeout.Valid {
+			t.Timeout = timeout.String
+		}
+		if condition.Valid {
+			t.Condition = condition.String
 		}
 
 		t.Env, err = decodeEnv(envJSON)
@@ -129,6 +148,51 @@ func (s *WorkflowTaskStore) GetForWorkflow(ctx context.Context, workflowID int) 
 	}
 
 	return tasks, nil
+}
+
+func (s *WorkflowTaskStore) GetByNameForWorkflow(ctx context.Context, workflowID int, taskName string) (*WorkflowTask, error) {
+	var (
+		t          WorkflowTask
+		retryDelay sql.NullString
+		timeout    sql.NullString
+		condition  sql.NullString
+		envJSON    sql.NullString
+	)
+
+	err := s.DB.QueryRowContext(ctx, s.getByNameForWfQ, workflowID, taskName).Scan(
+		&t.ID,
+		&t.WorkflowID,
+		&t.Name,
+		&t.Script,
+		&t.Retries,
+		&retryDelay,
+		&timeout,
+		&condition,
+		&envJSON,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if retryDelay.Valid {
+		t.RetryDelay = retryDelay.String
+	}
+	if timeout.Valid {
+		t.Timeout = timeout.String
+	}
+	if condition.Valid {
+		t.Condition = condition.String
+	}
+
+	t.Env, err = decodeEnv(envJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	return &t, nil
 }
 
 func (s *WorkflowTaskStore) Update(ctx context.Context, t *WorkflowTask) error {

@@ -42,7 +42,7 @@ func NewTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-func insertTestWorkflow(t *testing.T, db *sql.DB, name string) int {
+func InsertTestWorkflow(t *testing.T, db *sql.DB, name string) int {
 	t.Helper()
 
 	res, err := db.Exec(
@@ -61,7 +61,7 @@ func insertTestWorkflow(t *testing.T, db *sql.DB, name string) int {
 	return int(id)
 }
 
-func insertTestTask(t *testing.T, db *sql.DB, workflowID int, name string) int {
+func InsertTestTask(t *testing.T, db *sql.DB, workflowID int, name string) int {
 	t.Helper()
 
 	res, err := db.Exec(`
@@ -80,7 +80,7 @@ func insertTestTask(t *testing.T, db *sql.DB, workflowID int, name string) int {
 	return int(id)
 }
 
-func insertTestWorkflowRun(t *testing.T, db *sql.DB, workflowID int) int {
+func InsertTestWorkflowRun(t *testing.T, db *sql.DB, workflowID int) int {
 	t.Helper()
 
 	res, err := db.Exec(`

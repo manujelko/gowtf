@@ -13,7 +13,7 @@ func TestWorkflowRunStore_InsertAndGetByID(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	run, err := store.Insert(ctx, wfID, RunPending)
 	if err != nil {
@@ -54,7 +54,7 @@ func TestWorkflowRunStore_GetLatestForWorkflow(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	run, err := store.Insert(ctx, wfID, RunPending)
 	if err != nil {
@@ -88,7 +88,7 @@ func TestWorkflowRunStore_UpdateStatus(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	wfID := insertTestWorkflow(t, db, "wf1")
+	wfID := InsertTestWorkflow(t, db, "wf1")
 
 	run, err := store.Insert(ctx, wfID, RunPending)
 	if err != nil {
