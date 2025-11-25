@@ -22,11 +22,13 @@ type Workflow struct {
 }
 
 type WorkflowStore struct {
-	DB      *sql.DB
-	insertQ string
-	getByQ  string
-	updateQ string
-	deleteQ string
+	DB             *sql.DB
+	insertQ        string
+	getByQ         string
+	getByIDQ       string
+	getAllEnabledQ string
+	updateQ        string
+	deleteQ        string
 }
 
 func NewWorkflowStore(db *sql.DB) (*WorkflowStore, error) {
@@ -35,6 +37,14 @@ func NewWorkflowStore(db *sql.DB) (*WorkflowStore, error) {
 		return nil, err
 	}
 	getByQ, err := workflowQueries.ReadFile("queries/get_workflow_by_name.sql")
+	if err != nil {
+		return nil, err
+	}
+	getByIDQ, err := workflowQueries.ReadFile("queries/get_workflow_by_id.sql")
+	if err != nil {
+		return nil, err
+	}
+	getAllEnabledQ, err := workflowQueries.ReadFile("queries/get_all_enabled_workflows.sql")
 	if err != nil {
 		return nil, err
 	}
@@ -48,11 +58,13 @@ func NewWorkflowStore(db *sql.DB) (*WorkflowStore, error) {
 	}
 
 	return &WorkflowStore{
-		DB:      db,
-		insertQ: string(insertQ),
-		getByQ:  string(getByQ),
-		updateQ: string(updateQ),
-		deleteQ: string(deleteQ),
+		DB:             db,
+		insertQ:        string(insertQ),
+		getByQ:         string(getByQ),
+		getByIDQ:       string(getByIDQ),
+		getAllEnabledQ: string(getAllEnabledQ),
+		updateQ:        string(updateQ),
+		deleteQ:        string(deleteQ),
 	}, nil
 }
 
@@ -114,6 +126,83 @@ func (s *WorkflowStore) GetByName(ctx context.Context, name string) (*Workflow, 
 	}
 
 	return &w, nil
+}
+
+func (s *WorkflowStore) GetByID(ctx context.Context, id int) (*Workflow, error) {
+	var (
+		w       Workflow
+		envJSON sql.NullString
+		enabled int
+	)
+
+	err := s.DB.QueryRowContext(ctx, s.getByIDQ, id).Scan(
+		&w.ID,
+		&w.Name,
+		&w.Schedule,
+		&envJSON,
+		&w.Hash,
+		&enabled,
+		&w.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	w.Enabled = enabled == 1
+	w.Env, err = decodeEnv(envJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	return &w, nil
+}
+
+func (s *WorkflowStore) GetAllEnabled(ctx context.Context) ([]*Workflow, error) {
+	rows, err := s.DB.QueryContext(ctx, s.getAllEnabledQ)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var workflows []*Workflow
+
+	for rows.Next() {
+		var (
+			w       Workflow
+			envJSON sql.NullString
+			enabled int
+		)
+
+		err := rows.Scan(
+			&w.ID,
+			&w.Name,
+			&w.Schedule,
+			&envJSON,
+			&w.Hash,
+			&enabled,
+			&w.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		w.Enabled = enabled == 1
+		w.Env, err = decodeEnv(envJSON)
+		if err != nil {
+			return nil, err
+		}
+
+		workflows = append(workflows, &w)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return workflows, nil
 }
 
 func (s *WorkflowStore) Update(ctx context.Context, w *Workflow) error {

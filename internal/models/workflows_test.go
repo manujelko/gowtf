@@ -244,3 +244,162 @@ func TestWorkflowStore_UpdateTx(t *testing.T) {
 		t.Fatalf("expected Hash %q, got %q", "updated-hash", got.Hash)
 	}
 }
+
+func TestWorkflowStore_GetByID(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wf := &Workflow{
+		Name:     "test-workflow",
+		Schedule: "* * * * *",
+		Env: map[string]string{
+			"TEST_VAR": "test-value",
+		},
+		Hash:    "test-hash",
+		Enabled: true,
+	}
+
+	err = store.Insert(ctx, wf)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	got, err := store.GetByID(ctx, wf.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+
+	if got == nil {
+		t.Fatalf("expected workflow, got nil")
+	}
+	if got.ID != wf.ID {
+		t.Fatalf("expected ID %d, got %d", wf.ID, got.ID)
+	}
+	if got.Name != wf.Name {
+		t.Fatalf("expected Name %q, got %q", wf.Name, got.Name)
+	}
+	if got.Schedule != wf.Schedule {
+		t.Fatalf("expected Schedule %q, got %q", wf.Schedule, got.Schedule)
+	}
+	if got.Env["TEST_VAR"] != wf.Env["TEST_VAR"] {
+		t.Fatalf("expected Env %q, got %q", wf.Env["TEST_VAR"], got.Env["TEST_VAR"])
+	}
+	if got.Hash != wf.Hash {
+		t.Fatalf("expected Hash %q, got %q", wf.Hash, got.Hash)
+	}
+	if got.Enabled != wf.Enabled {
+		t.Fatalf("expected Enabled %t, got %t", wf.Enabled, got.Enabled)
+	}
+}
+
+func TestWorkflowStore_GetByID_NotFound(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	got, err := store.GetByID(ctx, 999)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil, got %v", got)
+	}
+}
+
+func TestWorkflowStore_GetAllEnabled(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	// Insert enabled workflow
+	wf1 := &Workflow{
+		Name:     "enabled-workflow",
+		Schedule: "* * * * *",
+		Hash:     "hash1",
+		Enabled:  true,
+	}
+	err = store.Insert(ctx, wf1)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Insert disabled workflow
+	wf2 := &Workflow{
+		Name:     "disabled-workflow",
+		Schedule: "* * * * *",
+		Hash:     "hash2",
+		Enabled:  false,
+	}
+	err = store.Insert(ctx, wf2)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Insert another enabled workflow
+	wf3 := &Workflow{
+		Name:     "another-enabled",
+		Schedule: "0 * * * *",
+		Hash:     "hash3",
+		Enabled:  true,
+	}
+	err = store.Insert(ctx, wf3)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	got, err := store.GetAllEnabled(ctx)
+	if err != nil {
+		t.Fatalf("GetAllEnabled failed: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 enabled workflows, got %d", len(got))
+	}
+
+	// Check that only enabled workflows are returned
+	names := make(map[string]bool)
+	for _, w := range got {
+		names[w.Name] = true
+		if !w.Enabled {
+			t.Fatalf("expected all workflows to be enabled, got %q with Enabled=false", w.Name)
+		}
+	}
+
+	if !names["enabled-workflow"] {
+		t.Fatalf("expected enabled-workflow to be in results")
+	}
+	if !names["another-enabled"] {
+		t.Fatalf("expected another-enabled to be in results")
+	}
+	if names["disabled-workflow"] {
+		t.Fatalf("expected disabled-workflow to NOT be in results")
+	}
+}
+
+func TestWorkflowStore_GetAllEnabled_Empty(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewWorkflowStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	got, err := store.GetAllEnabled(ctx)
+	if err != nil {
+		t.Fatalf("GetAllEnabled failed: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Fatalf("expected 0 workflows, got %d", len(got))
+	}
+}

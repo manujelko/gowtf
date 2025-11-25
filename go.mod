@@ -4,6 +4,7 @@ go 1.25.3
 
 require (
 	github.com/fsnotify/fsnotify v1.7.0
+	github.com/robfig/cron/v3 v3.0.1
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.40.1
 )
