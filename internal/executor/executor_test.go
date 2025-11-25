@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -13,7 +14,13 @@ func TestExecutor_HandleWorkflowRun(t *testing.T) {
 	db := models.NewTestDB(t)
 	events := make(chan scheduler.WorkflowRunEvent, 10)
 
-	executor, err := NewExecutor(db, events)
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir)
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -96,7 +103,13 @@ func TestExecutor_DependencyResolution(t *testing.T) {
 	db := models.NewTestDB(t)
 	events := make(chan scheduler.WorkflowRunEvent, 10)
 
-	executor, err := NewExecutor(db, events)
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir)
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -201,7 +214,13 @@ func TestExecutor_ConditionEvaluation_AllUpstreamSuccess(t *testing.T) {
 	db := models.NewTestDB(t)
 	events := make(chan scheduler.WorkflowRunEvent, 10)
 
-	executor, err := NewExecutor(db, events)
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir)
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -287,8 +306,8 @@ func TestExecutor_ConditionEvaluation_AllUpstreamSuccess(t *testing.T) {
 		WorkflowID:    wfID,
 	}
 
-	// Wait for processing
-	time.Sleep(1 * time.Second)
+	// Wait for processing (longer now since we're actually executing scripts)
+	time.Sleep(2 * time.Second)
 
 	// Verify all tasks completed
 	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
@@ -318,7 +337,13 @@ func TestExecutor_ConditionEvaluation_TaskNameSuccess(t *testing.T) {
 	db := models.NewTestDB(t)
 	events := make(chan scheduler.WorkflowRunEvent, 10)
 
-	executor, err := NewExecutor(db, events)
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir)
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -400,8 +425,8 @@ func TestExecutor_ConditionEvaluation_TaskNameSuccess(t *testing.T) {
 		WorkflowID:    wfID,
 	}
 
-	// Wait for processing
-	time.Sleep(1 * time.Second)
+	// Wait for processing (longer now since we're actually executing scripts)
+	time.Sleep(2 * time.Second)
 
 	// Verify task2 ran (task1 succeeded)
 	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
@@ -431,7 +456,13 @@ func TestExecutor_TaskStateTransitions(t *testing.T) {
 	db := models.NewTestDB(t)
 	events := make(chan scheduler.WorkflowRunEvent, 10)
 
-	executor, err := NewExecutor(db, events)
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir)
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -472,8 +503,8 @@ func TestExecutor_TaskStateTransitions(t *testing.T) {
 		WorkflowID:    wfID,
 	}
 
-	// Wait for processing
-	time.Sleep(500 * time.Millisecond)
+	// Wait for processing (longer now since we're actually executing scripts)
+	time.Sleep(2 * time.Second)
 
 	// Verify state transitions occurred
 	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
@@ -510,7 +541,13 @@ func TestExecutor_WorkflowRunStatusUpdate(t *testing.T) {
 	db := models.NewTestDB(t)
 	events := make(chan scheduler.WorkflowRunEvent, 10)
 
-	executor, err := NewExecutor(db, events)
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir)
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -551,8 +588,8 @@ func TestExecutor_WorkflowRunStatusUpdate(t *testing.T) {
 		WorkflowID:    wfID,
 	}
 
-	// Wait for processing
-	time.Sleep(1 * time.Second)
+	// Wait for processing (longer now since we're actually executing scripts)
+	time.Sleep(2 * time.Second)
 
 	// Verify workflow run status was updated
 	workflowRunStore, err := models.NewWorkflowRunStore(db)

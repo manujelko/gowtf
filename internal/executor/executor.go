@@ -11,6 +11,7 @@ import (
 
 	"github.com/manujelko/gowtf/internal/models"
 	"github.com/manujelko/gowtf/internal/scheduler"
+	"github.com/manujelko/gowtf/internal/worker"
 )
 
 // Executor orchestrates workflow task execution
@@ -22,7 +23,8 @@ type Executor struct {
 	taskInstanceStore *models.TaskInstanceStore
 	depsStore         *models.TaskDependenciesStore
 
-	events <-chan scheduler.WorkflowRunEvent
+	events     <-chan scheduler.WorkflowRunEvent
+	workerPool *worker.WorkerPool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -30,7 +32,7 @@ type Executor struct {
 }
 
 // NewExecutor creates a new executor instance
-func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent) (*Executor, error) {
+func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize int, outputDir string) (*Executor, error) {
 	workflowStore, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow store: %w", err)
@@ -56,6 +58,11 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent) (*Executo
 		return nil, fmt.Errorf("failed to create dependencies store: %w", err)
 	}
 
+	workerPool, err := worker.NewWorkerPool(poolSize, outputDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create worker pool: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Executor{
@@ -66,6 +73,7 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent) (*Executo
 		taskInstanceStore: taskInstanceStore,
 		depsStore:         depsStore,
 		events:            events,
+		workerPool:        workerPool,
 		ctx:               ctx,
 		cancel:            cancel,
 	}, nil
@@ -74,6 +82,18 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent) (*Executo
 // Start starts the executor event loop
 func (e *Executor) Start(ctx context.Context) error {
 	log.Printf("Executor: Started")
+
+	// Start worker pool
+	if err := e.workerPool.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start worker pool: %w", err)
+	}
+
+	// Start result handler
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		e.handleResults(ctx)
+	}()
 
 	e.wg.Add(1)
 	go func() {
@@ -103,6 +123,7 @@ func (e *Executor) Start(ctx context.Context) error {
 // Stop stops the executor gracefully
 func (e *Executor) Stop() {
 	e.cancel()
+	e.workerPool.Stop()
 	e.wg.Wait()
 	log.Printf("Executor: Stopped")
 }
@@ -270,28 +291,24 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 				continue
 			}
 
-			log.Printf("Executor: Task %d (%s) marked as running (worker pool integration pending)", ti.TaskID, task.Name)
+			log.Printf("Executor: Task %d (%s) marked as running, submitting to worker pool", ti.TaskID, task.Name)
 
-			// TODO: Send to worker pool for actual execution
-			// For now, we'll simulate immediate success for testing
-			// In a real implementation, this would:
-			// 1. Send task to worker pool
-			// 2. Wait for completion event
-			// 3. Update task state based on result
+			// Submit task to worker pool
+			job := worker.TaskJob{
+				TaskInstance: ti,
+				Task:         task,
+				OutputDir:    "", // Worker pool uses its own output directory
+				Context:      ctx,
+			}
 
-			// Simulate task execution (for testing purposes)
-			// In production, this would be handled by the worker pool
-			e.wg.Add(1)
-			go func(taskInst *models.TaskInstance, taskDef *models.WorkflowTask) {
-				defer e.wg.Done()
-				// Simulate immediate success (exit code 0)
-				// In real implementation, worker would execute and return result
-				if err := e.markTaskSuccess(ctx, taskInst, 0); err != nil {
-					log.Printf("Executor: Failed to mark task %d as success: %v", taskInst.TaskID, err)
-				} else {
-					log.Printf("Executor: Task %d (%s) completed successfully", taskInst.TaskID, taskDef.Name)
+			if err := e.workerPool.Submit(job); err != nil {
+				log.Printf("Executor: Failed to submit task %d to worker pool: %v", ti.TaskID, err)
+				// Mark as failed if submission fails
+				if err := e.markTaskFailed(ctx, ti, 1); err != nil {
+					log.Printf("Executor: Failed to mark task %d as failed: %v", ti.TaskID, err)
 				}
-			}(ti, task)
+				continue
+			}
 		}
 
 		// Small delay before next iteration
@@ -509,4 +526,65 @@ func (e *Executor) markTaskSkipped(ctx context.Context, taskInstance *models.Tas
 	taskInstance.State = models.TaskStateSkipped
 	taskInstance.FinishedAt = &now
 	return e.taskInstanceStore.Update(ctx, taskInstance)
+}
+
+// handleResults processes results from the worker pool
+func (e *Executor) handleResults(ctx context.Context) {
+	for {
+		select {
+		case result, ok := <-e.workerPool.Results():
+			if !ok {
+				return
+			}
+			if err := e.processTaskResult(ctx, result); err != nil {
+				log.Printf("Executor: Failed to process task result for task instance %d: %v", result.TaskInstanceID, err)
+			}
+		case <-ctx.Done():
+			return
+		case <-e.ctx.Done():
+			return
+		}
+	}
+}
+
+// processTaskResult updates the task instance based on the worker pool result
+func (e *Executor) processTaskResult(ctx context.Context, result worker.TaskResult) error {
+	// Get all task instances for the run to find the one we need
+	taskInstances, err := e.taskInstanceStore.GetForRun(ctx, result.WorkflowRunID)
+	if err != nil {
+		return fmt.Errorf("failed to get task instances: %w", err)
+	}
+
+	var taskInstance *models.TaskInstance
+	for _, ti := range taskInstances {
+		if ti.ID == result.TaskInstanceID {
+			taskInstance = ti
+			break
+		}
+	}
+
+	if taskInstance == nil {
+		return fmt.Errorf("task instance %d not found in workflow run %d", result.TaskInstanceID, result.WorkflowRunID)
+	}
+
+	// Update task instance with result
+	taskInstance.ExitCode = &result.ExitCode
+	if result.StdoutPath != "" {
+		taskInstance.StdoutPath = &result.StdoutPath
+	}
+	if result.StderrPath != "" {
+		taskInstance.StderrPath = &result.StderrPath
+	}
+
+	// Mark as success or failed based on exit code
+	if result.Error != nil {
+		log.Printf("Executor: Task instance %d execution error: %v", result.TaskInstanceID, result.Error)
+		return e.markTaskFailed(ctx, taskInstance, result.ExitCode)
+	}
+
+	if result.ExitCode == 0 {
+		return e.markTaskSuccess(ctx, taskInstance, result.ExitCode)
+	}
+
+	return e.markTaskFailed(ctx, taskInstance, result.ExitCode)
 }
