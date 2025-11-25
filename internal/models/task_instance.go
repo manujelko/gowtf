@@ -67,6 +67,7 @@ type TaskInstanceStore struct {
 	updateQ          string
 	getForRunQ       string
 	getByTaskAndRunQ string
+	getByIDQ         string
 }
 
 func NewTaskInstanceStore(db *sql.DB) (*TaskInstanceStore, error) {
@@ -86,6 +87,10 @@ func NewTaskInstanceStore(db *sql.DB) (*TaskInstanceStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	getByIDQ, err := taskInstanceQueries.ReadFile("queries/task_instances/get_by_id.sql")
+	if err != nil {
+		return nil, err
+	}
 
 	return &TaskInstanceStore{
 		DB:               db,
@@ -93,6 +98,7 @@ func NewTaskInstanceStore(db *sql.DB) (*TaskInstanceStore, error) {
 		updateQ:          string(updateQ),
 		getForRunQ:       string(getForRunQ),
 		getByTaskAndRunQ: string(getByTaskAndRunQ),
+		getByIDQ:         string(getByIDQ),
 	}, nil
 }
 
@@ -266,6 +272,66 @@ func (s *TaskInstanceStore) GetByTaskIDAndRun(ctx context.Context, taskID, workf
 	)
 
 	err := s.DB.QueryRowContext(ctx, s.getByTaskAndRunQ, taskID, workflowRunID).Scan(
+		&ti.ID,
+		&ti.WorkflowRunID,
+		&ti.TaskID,
+		&stateStr,
+		&ti.Attempt,
+		&exitCode,
+		&startedAt,
+		&finishedAt,
+		&stdoutPath,
+		&stderrPath,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	state, err := ParseTaskInstanceState(stateStr)
+	if err != nil {
+		return nil, err
+	}
+	ti.State = state
+
+	if exitCode.Valid {
+		v := int(exitCode.Int64)
+		ti.ExitCode = &v
+	}
+	if startedAt.Valid {
+		t := startedAt.Time
+		ti.StartedAt = &t
+	}
+	if finishedAt.Valid {
+		t := finishedAt.Time
+		ti.FinishedAt = &t
+	}
+	if stdoutPath.Valid {
+		s := stdoutPath.String
+		ti.StdoutPath = &s
+	}
+	if stderrPath.Valid {
+		s := stderrPath.String
+		ti.StderrPath = &s
+	}
+
+	return &ti, nil
+}
+
+func (s *TaskInstanceStore) GetByID(ctx context.Context, id int) (*TaskInstance, error) {
+	var (
+		ti         TaskInstance
+		stateStr   string
+		exitCode   sql.NullInt64
+		startedAt  sql.NullTime
+		finishedAt sql.NullTime
+		stdoutPath sql.NullString
+		stderrPath sql.NullString
+	)
+
+	err := s.DB.QueryRowContext(ctx, s.getByIDQ, id).Scan(
 		&ti.ID,
 		&ti.WorkflowRunID,
 		&ti.TaskID,

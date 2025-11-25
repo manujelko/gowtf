@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/manujelko/gowtf/internal/health"
 	"github.com/manujelko/gowtf/internal/models"
 )
 
@@ -610,5 +611,170 @@ func TestWorkerPool_SubmitAfterStop(t *testing.T) {
 	err = pool.Submit(job)
 	if err == nil {
 		t.Error("Expected error when submitting after stop, got nil")
+	}
+}
+
+func TestWorkerPool_HeartbeatSending(t *testing.T) {
+	outputDir, err := os.MkdirTemp("", "gowtf-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	pool, err := NewWorkerPool(1, outputDir)
+	if err != nil {
+		t.Fatalf("NewWorkerPool failed: %v", err)
+	}
+
+	// Create a heartbeat channel
+	heartbeatCh := make(chan health.HeartbeatMessage, 10)
+	heartbeatInterval := 50 * time.Millisecond
+	pool.SetHeartbeatChannel(heartbeatCh, heartbeatInterval)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pool.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer pool.Stop()
+
+	taskInstanceID := 123
+	taskInstance := &models.TaskInstance{
+		ID:            taskInstanceID,
+		WorkflowRunID: 100,
+		TaskID:        10,
+		State:         models.TaskStateRunning,
+		Attempt:       1,
+	}
+
+	// Create a task that runs for a while to allow multiple heartbeats
+	task := &models.WorkflowTask{
+		ID:     10,
+		Script: "sleep 0.5", // Sleep for 500ms
+		Env:    make(map[string]string),
+	}
+
+	job := TaskJob{
+		TaskInstance: taskInstance,
+		Task:         task,
+		Context:      ctx,
+	}
+
+	if err := pool.Submit(job); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	// Collect heartbeats
+	var heartbeats []health.HeartbeatMessage
+	heartbeatTimeout := time.After(600 * time.Millisecond)
+	heartbeatDone := make(chan struct{})
+
+	go func() {
+		defer close(heartbeatDone)
+		for {
+			select {
+			case hb := <-heartbeatCh:
+				heartbeats = append(heartbeats, hb)
+				if hb.TaskInstanceID != taskInstanceID {
+					t.Errorf("Expected task instance ID %d, got %d", taskInstanceID, hb.TaskInstanceID)
+				}
+			case <-heartbeatTimeout:
+				return
+			}
+		}
+	}()
+
+	// Wait for task to complete
+	select {
+	case result := <-pool.Results():
+		if result.Error != nil && result.ExitCode != 0 {
+			// Task might have been cancelled, which is fine for this test
+			t.Logf("Task exited with code %d: %v", result.ExitCode, result.Error)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for task result")
+	}
+
+	// Wait for heartbeat collection to finish
+	<-heartbeatDone
+
+	// We should have received at least a few heartbeats during the 500ms sleep
+	// (at 50ms interval, we should get at least 8-10 heartbeats)
+	if len(heartbeats) < 3 {
+		t.Errorf("Expected at least 3 heartbeats, got %d", len(heartbeats))
+	}
+
+	// Verify heartbeats have valid timestamps
+	for i, hb := range heartbeats {
+		if hb.Timestamp.IsZero() {
+			t.Errorf("Heartbeat %d has zero timestamp", i)
+		}
+	}
+
+	// Verify heartbeats are roughly in order
+	for i := 1; i < len(heartbeats); i++ {
+		if heartbeats[i].Timestamp.Before(heartbeats[i-1].Timestamp) {
+			t.Errorf("Heartbeat timestamps should be in order")
+		}
+	}
+}
+
+func TestWorkerPool_HeartbeatWithoutChannel(t *testing.T) {
+	outputDir, err := os.MkdirTemp("", "gowtf-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	pool, err := NewWorkerPool(1, outputDir)
+	if err != nil {
+		t.Fatalf("NewWorkerPool failed: %v", err)
+	}
+
+	// Don't set heartbeat channel - should work fine
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pool.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer pool.Stop()
+
+	taskInstance := &models.TaskInstance{
+		ID:            1,
+		WorkflowRunID: 100,
+		TaskID:        10,
+		State:         models.TaskStateRunning,
+		Attempt:       1,
+	}
+
+	task := &models.WorkflowTask{
+		ID:     10,
+		Script: "echo 'test'",
+		Env:    make(map[string]string),
+	}
+
+	job := TaskJob{
+		TaskInstance: taskInstance,
+		Task:         task,
+		Context:      ctx,
+	}
+
+	if err := pool.Submit(job); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	// Task should complete successfully without heartbeat channel
+	select {
+	case result := <-pool.Results():
+		if result.Error != nil {
+			t.Fatalf("Task execution failed: %v", result.Error)
+		}
+		if result.ExitCode != 0 {
+			t.Errorf("Expected exit code 0, got %d", result.ExitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for task result")
 	}
 }

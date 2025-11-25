@@ -10,9 +10,6 @@ SELECT
     stdout_path,
     stderr_path
 FROM task_instances
-WHERE task_id = ? AND workflow_run_id = ?;
-
-
-
+WHERE id = ?;
 
 

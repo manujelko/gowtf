@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/manujelko/gowtf/internal/health"
 	"github.com/manujelko/gowtf/internal/models"
 )
 
@@ -38,6 +39,9 @@ type WorkerPool struct {
 	jobChan    chan TaskJob
 	resultChan chan TaskResult
 
+	heartbeatCh       chan<- health.HeartbeatMessage
+	heartbeatInterval time.Duration
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -65,12 +69,13 @@ func NewWorkerPool(size int, outputDir string) (*WorkerPool, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &WorkerPool{
-		size:       size,
-		outputDir:  outputDir,
-		jobChan:    make(chan TaskJob, size*2), // Buffer to allow some queuing
-		resultChan: make(chan TaskResult, size*2),
-		ctx:        ctx,
-		cancel:     cancel,
+		size:              size,
+		outputDir:         outputDir,
+		jobChan:           make(chan TaskJob, size*2), // Buffer to allow some queuing
+		resultChan:        make(chan TaskResult, size*2),
+		heartbeatInterval: 5 * time.Second, // Default heartbeat interval
+		ctx:               ctx,
+		cancel:            cancel,
 	}, nil
 }
 
@@ -135,6 +140,16 @@ func (wp *WorkerPool) Submit(job TaskJob) error {
 // Results returns the channel for receiving task results
 func (wp *WorkerPool) Results() <-chan TaskResult {
 	return wp.resultChan
+}
+
+// SetHeartbeatChannel sets the heartbeat channel for sending heartbeat messages
+func (wp *WorkerPool) SetHeartbeatChannel(ch chan<- health.HeartbeatMessage, interval time.Duration) {
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	wp.heartbeatCh = ch
+	if interval > 0 {
+		wp.heartbeatInterval = interval
+	}
 }
 
 // worker is the main worker goroutine that processes tasks
@@ -215,6 +230,19 @@ func (wp *WorkerPool) executeTask(ctx context.Context, job TaskJob) TaskResult {
 	execCtx, cancel := context.WithTimeout(job.Context, timeout)
 	defer cancel()
 
+	// Start sending heartbeats if heartbeat channel is configured
+	wp.mu.RLock()
+	heartbeatCh := wp.heartbeatCh
+	heartbeatInterval := wp.heartbeatInterval
+	wp.mu.RUnlock()
+
+	var heartbeatDone chan struct{}
+	if heartbeatCh != nil {
+		heartbeatDone = make(chan struct{})
+		go wp.sendHeartbeats(execCtx, job.TaskInstance.ID, heartbeatCh, heartbeatInterval, heartbeatDone)
+		defer close(heartbeatDone)
+	}
+
 	// Build environment variables
 	env := os.Environ()
 	for k, v := range job.Task.Env {
@@ -249,4 +277,43 @@ func (wp *WorkerPool) executeTask(ctx context.Context, job TaskJob) TaskResult {
 	// Success
 	result.ExitCode = 0
 	return result
+}
+
+// sendHeartbeats sends periodic heartbeat messages while a task is executing
+func (wp *WorkerPool) sendHeartbeats(ctx context.Context, taskInstanceID int, heartbeatCh chan<- health.HeartbeatMessage, interval time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Send initial heartbeat
+	select {
+	case heartbeatCh <- health.HeartbeatMessage{
+		TaskInstanceID: taskInstanceID,
+		Timestamp:      time.Now(),
+	}:
+	case <-ctx.Done():
+		return
+	case <-done:
+		return
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			select {
+			case heartbeatCh <- health.HeartbeatMessage{
+				TaskInstanceID: taskInstanceID,
+				Timestamp:      time.Now(),
+			}:
+			case <-ctx.Done():
+				return
+			case <-done:
+				return
+			}
+
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		}
+	}
 }

@@ -191,3 +191,57 @@ func TestTaskInstanceStore_GetByTaskIDAndRun(t *testing.T) {
 		t.Fatalf("expected nil for non-existent task instance, got %v", got)
 	}
 }
+
+func TestTaskInstanceStore_GetByID(t *testing.T) {
+	db := NewTestDB(t)
+	store, err := NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+	ctx := context.Background()
+
+	wfID := InsertTestWorkflow(t, db, "wf1")
+	wfRunID := InsertTestWorkflowRun(t, db, wfID)
+	taskID := InsertTestTask(t, db, wfID, "test-task")
+
+	taskInstance := &TaskInstance{
+		WorkflowRunID: wfRunID,
+		TaskID:        taskID,
+		State:         TaskStatePending,
+		Attempt:       1,
+	}
+	err = store.Insert(ctx, taskInstance)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	got, err := store.GetByID(ctx, taskInstance.ID)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+
+	if got == nil {
+		t.Fatalf("expected task instance, got nil")
+	}
+	if got.ID != taskInstance.ID {
+		t.Fatalf("expected ID %d, got %d", taskInstance.ID, got.ID)
+	}
+	if got.WorkflowRunID != wfRunID {
+		t.Fatalf("expected WorkflowRunID %d, got %d", wfRunID, got.WorkflowRunID)
+	}
+	if got.TaskID != taskID {
+		t.Fatalf("expected TaskID %d, got %d", taskID, got.TaskID)
+	}
+	if got.State != TaskStatePending {
+		t.Fatalf("expected State %v, got %v", TaskStatePending, got.State)
+	}
+
+	// Test non-existent task instance
+	got, err = store.GetByID(ctx, 999)
+	if err != nil {
+		t.Fatalf("GetByID failed: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil for non-existent task instance, got %v", got)
+	}
+}

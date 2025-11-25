@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/manujelko/gowtf/internal/health"
 	"github.com/manujelko/gowtf/internal/models"
 	"github.com/manujelko/gowtf/internal/scheduler"
 	"github.com/manujelko/gowtf/internal/worker"
@@ -23,8 +24,9 @@ type Executor struct {
 	taskInstanceStore *models.TaskInstanceStore
 	depsStore         *models.TaskDependenciesStore
 
-	events     <-chan scheduler.WorkflowRunEvent
-	workerPool *worker.WorkerPool
+	events        <-chan scheduler.WorkflowRunEvent
+	workerPool    *worker.WorkerPool
+	healthMonitor *health.HealthMonitor
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -63,6 +65,13 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize 
 		return nil, fmt.Errorf("failed to create worker pool: %w", err)
 	}
 
+	// Create health monitor
+	healthConfig := health.DefaultConfig()
+	healthMonitor := health.NewHealthMonitor(taskInstanceStore, healthConfig)
+
+	// Set up heartbeat channel for worker pool
+	workerPool.SetHeartbeatChannel(healthMonitor.HeartbeatChannel(), healthConfig.HeartbeatInterval)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Executor{
@@ -74,6 +83,7 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize 
 		depsStore:         depsStore,
 		events:            events,
 		workerPool:        workerPool,
+		healthMonitor:     healthMonitor,
 		ctx:               ctx,
 		cancel:            cancel,
 	}, nil
@@ -82,6 +92,9 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize 
 // Start starts the executor event loop
 func (e *Executor) Start(ctx context.Context) error {
 	log.Printf("Executor: Started")
+
+	// Start health monitor
+	e.healthMonitor.Start(ctx)
 
 	// Start worker pool
 	if err := e.workerPool.Start(ctx); err != nil {
@@ -123,6 +136,7 @@ func (e *Executor) Start(ctx context.Context) error {
 // Stop stops the executor gracefully
 func (e *Executor) Stop() {
 	e.cancel()
+	e.healthMonitor.Stop()
 	e.workerPool.Stop()
 	e.wg.Wait()
 	log.Printf("Executor: Stopped")
@@ -293,15 +307,25 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 
 			log.Printf("Executor: Task %d (%s) marked as running, submitting to worker pool", ti.TaskID, task.Name)
 
+			// Create per-task cancellation context for health monitor
+			taskCtx, taskCancel := context.WithCancel(ctx)
+
+			// Register task with health monitor
+			e.healthMonitor.RegisterTask(ti.ID, taskCancel)
+
 			// Submit task to worker pool
 			job := worker.TaskJob{
 				TaskInstance: ti,
 				Task:         task,
 				OutputDir:    "", // Worker pool uses its own output directory
-				Context:      ctx,
+				Context:      taskCtx,
 			}
 
 			if err := e.workerPool.Submit(job); err != nil {
+				// Unregister from health monitor on submission failure
+				e.healthMonitor.UnregisterTask(ti.ID)
+				taskCancel() // Cancel the context we created
+
 				log.Printf("Executor: Failed to submit task %d to worker pool: %v", ti.TaskID, err)
 				// Mark as failed if submission fails
 				if err := e.markTaskFailed(ctx, ti, 1); err != nil {
@@ -549,6 +573,9 @@ func (e *Executor) handleResults(ctx context.Context) {
 
 // processTaskResult updates the task instance based on the worker pool result
 func (e *Executor) processTaskResult(ctx context.Context, result worker.TaskResult) error {
+	// Unregister task from health monitor when result is received
+	defer e.healthMonitor.UnregisterTask(result.TaskInstanceID)
+
 	// Get all task instances for the run to find the one we need
 	taskInstances, err := e.taskInstanceStore.GetForRun(ctx, result.WorkflowRunID)
 	if err != nil {
