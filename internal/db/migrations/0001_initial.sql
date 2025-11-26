@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 -- Workflows definition (one row per YAML file)
-CREATE TABLE workflows (
+CREATE TABLE IF NOT EXISTS workflows (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     schedule TEXT NOT NULL,
@@ -14,10 +14,10 @@ CREATE TABLE workflows (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_workflows_enabled ON workflows(enabled);
+CREATE INDEX IF NOT EXISTS idx_workflows_enabled ON workflows(enabled);
 
 -- Tasks belonging to a workflow
-CREATE TABLE workflow_tasks (
+CREATE TABLE IF NOT EXISTS workflow_tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_id INTEGER NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
@@ -31,14 +31,14 @@ CREATE TABLE workflow_tasks (
 );
 
 -- Dependencies between tasks
-CREATE TABLE task_dependencies (
+CREATE TABLE IF NOT EXISTS task_dependencies (
     task_id INTEGER NOT NULL REFERENCES workflow_tasks(id) ON DELETE CASCADE,
     depends_on_id INTEGER NOT NULL REFERENCES workflow_tasks(id) ON DELETE CASCADE,
     PRIMARY KEY(task_id, depends_on_id)
 );
 
 -- Workflow run instances (scheduler creates these)
-CREATE TABLE workflow_runs (
+CREATE TABLE IF NOT EXISTS workflow_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_id INTEGER NOT NULL REFERENCES workflows(id),
     status TEXT NOT NULL,  -- pending, running, success, failed
@@ -47,7 +47,7 @@ CREATE TABLE workflow_runs (
 );
 
 -- Task instances (executor manages these)
-CREATE TABLE task_instances (
+CREATE TABLE IF NOT EXISTS task_instances (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     workflow_run_id INTEGER NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
     task_id INTEGER NOT NULL REFERENCES workflow_tasks(id),
@@ -60,4 +60,4 @@ CREATE TABLE task_instances (
     stderr_path TEXT
 );
 
-CREATE INDEX idx_task_instances_run ON task_instances(workflow_run_id);
+CREATE INDEX IF NOT EXISTS idx_task_instances_run ON task_instances(workflow_run_id);

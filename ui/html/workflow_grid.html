@@ -1,0 +1,58 @@
+{{ define "content" }}
+<div class="workflow-header">
+    <h2>{{ .Workflow.Name }}</h2>
+    <p><code>{{ .Workflow.Schedule }}</code></p>
+    <a href="/">← Back to Dashboard</a>
+</div>
+
+<div id="workflow-grid-container" hx-trigger="every 5s" hx-get="/workflow/{{ .Workflow.ID }}" hx-swap="outerHTML">
+    {{ template "workflow-grid" . }}
+</div>
+{{ end }}
+
+{{ define "workflow-grid" }}
+<div id="workflow-grid-container" hx-trigger="every 5s" hx-get="/workflow/{{ .Workflow.ID }}" hx-swap="outerHTML">
+    <div class="run-grid">
+        {{ range .Cells }}
+        {{ if .IsFuture }}
+        <div class="grid-cell future" 
+             title="Scheduled: {{ .Time.Format "Jan 02 15:04:05" }}">
+            <span class="cell-time">{{ .Time.Format "15:04" }}</span>
+        </div>
+        {{ else }}
+        <a href="/run/{{ .Run.ID }}" class="grid-cell status-{{ .Status }}" 
+           title="{{ .Status }} - {{ .Time.Format "Jan 02 15:04:05" }}">
+            <span class="cell-time">{{ .Time.Format "15:04" }}</span>
+        </a>
+        {{ end }}
+        {{ end }}
+    </div>
+
+    <div class="grid-legend">
+        <h3>Legend</h3>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-color status-success"></span>
+                <span>Success</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-failed"></span>
+                <span>Failed</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-running"></span>
+                <span>Running</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-pending"></span>
+                <span>Pending</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color future"></span>
+                <span>Future</span>
+            </div>
+        </div>
+    </div>
+</div>
+{{ end }}
+

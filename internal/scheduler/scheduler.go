@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/robfig/cron/v3"
 
@@ -211,59 +212,95 @@ func (s *Scheduler) unscheduleWorkflow(workflowID int) {
 
 	if exists {
 		s.cron.Remove(entryID)
-		log.Printf("Scheduler: Unscheduled workflow ID %d", workflowID)
+		// Try to get workflow name for logging
+		ctx := context.Background()
+		wf, err := s.workflowStore.GetByID(ctx, workflowID)
+		if err == nil && wf != nil {
+			log.Printf("Scheduler: Unscheduled workflow %q (ID: %d)", wf.Name, workflowID)
+		} else {
+			log.Printf("Scheduler: Unscheduled workflow ID %d", workflowID)
+		}
 	}
 }
 
 // onScheduleFire is called when a workflow's schedule fires
 func (s *Scheduler) onScheduleFire(workflowID int) {
-	ctx := context.Background()
+	// Run in a goroutine to avoid blocking the cron scheduler
+	// This allows multiple workflows to fire concurrently
+	go func() {
+		ctx := context.Background()
 
-	// Create workflow run
-	workflowRun, err := s.workflowRunStore.Insert(ctx, workflowID, models.RunPending)
-	if err != nil {
-		log.Printf("Scheduler: Failed to create workflow run for workflow ID %d: %v", workflowID, err)
-		return
-	}
+		// Fetch workflow name for logging
+		workflow, err := s.workflowStore.GetByID(ctx, workflowID)
+		if err != nil {
+			log.Printf("Scheduler: Failed to get workflow ID %d: %v", workflowID, err)
+			return
+		}
+		if workflow == nil {
+			log.Printf("Scheduler: Workflow ID %d not found", workflowID)
+			return
+		}
+		workflowName := workflow.Name
 
-	log.Printf("Scheduler: Created workflow run %d for workflow ID %d", workflowRun.ID, workflowID)
-
-	// Get all tasks for the workflow
-	tasks, err := s.taskStore.GetForWorkflow(ctx, workflowID)
-	if err != nil {
-		log.Printf("Scheduler: Failed to get tasks for workflow ID %d: %v", workflowID, err)
-		return
-	}
-
-	// Create task instances for all tasks
-	for _, task := range tasks {
-		taskInstance := &models.TaskInstance{
-			WorkflowRunID: workflowRun.ID,
-			TaskID:        task.ID,
-			State:         models.TaskStatePending,
-			Attempt:       1,
+		// Create workflow run with retry logic for database locks
+		var workflowRun *models.WorkflowRun
+		maxRetries := 3
+		for i := 0; i < maxRetries; i++ {
+			workflowRun, err = s.workflowRunStore.Insert(ctx, workflowID, models.RunPending)
+			if err == nil {
+				break
+			}
+			// If it's a lock error and we have retries left, wait and retry
+			if i < maxRetries-1 {
+				log.Printf("Scheduler: Database locked while creating workflow run for %q (ID: %d), retrying...", workflowName, workflowID)
+				time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+				continue
+			}
+		}
+		if err != nil {
+			log.Printf("Scheduler: Failed to create workflow run for %q (ID: %d) after %d retries: %v", workflowName, workflowID, maxRetries, err)
+			return
 		}
 
-		if err := s.taskInstanceStore.Insert(ctx, taskInstance); err != nil {
-			log.Printf("Scheduler: Failed to create task instance for task ID %d: %v", task.ID, err)
-			// Continue with other tasks
-			continue
-		}
-	}
+		log.Printf("Scheduler: Created workflow run %d for workflow %q (ID: %d)", workflowRun.ID, workflowName, workflowID)
 
-	log.Printf("Scheduler: Created %d task instances for workflow run %d", len(tasks), workflowRun.ID)
-
-	// Notify executor
-	if s.notifyCh != nil {
-		select {
-		case s.notifyCh <- WorkflowRunEvent{
-			WorkflowRunID: workflowRun.ID,
-			WorkflowID:    workflowID,
-		}:
-		case <-s.ctx.Done():
-			log.Printf("Scheduler: Context cancelled while sending notification")
+		// Get all tasks for the workflow
+		tasks, err := s.taskStore.GetForWorkflow(ctx, workflowID)
+		if err != nil {
+			log.Printf("Scheduler: Failed to get tasks for workflow %q (ID: %d): %v", workflowName, workflowID, err)
+			return
 		}
-	}
+
+		// Create task instances for all tasks
+		for _, task := range tasks {
+			taskInstance := &models.TaskInstance{
+				WorkflowRunID: workflowRun.ID,
+				TaskID:        task.ID,
+				State:         models.TaskStatePending,
+				Attempt:       1,
+			}
+
+			if err := s.taskInstanceStore.Insert(ctx, taskInstance); err != nil {
+				log.Printf("Scheduler: Failed to create task instance for task %q (ID: %d) in workflow %q: %v", task.Name, task.ID, workflowName, err)
+				// Continue with other tasks
+				continue
+			}
+		}
+
+		log.Printf("Scheduler: Created %d task instances for workflow run %d (workflow: %q)", len(tasks), workflowRun.ID, workflowName)
+
+		// Notify executor
+		if s.notifyCh != nil {
+			select {
+			case s.notifyCh <- WorkflowRunEvent{
+				WorkflowRunID: workflowRun.ID,
+				WorkflowID:    workflowID,
+			}:
+			case <-s.ctx.Done():
+				log.Printf("Scheduler: Context cancelled while sending notification for workflow %q", workflowName)
+			}
+		}
+	}()
 }
 
 // Stop stops the scheduler gracefully

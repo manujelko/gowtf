@@ -17,6 +17,8 @@ import (
 type TaskJob struct {
 	TaskInstance *models.TaskInstance
 	Task         *models.WorkflowTask
+	WorkflowName string
+	RunStartedAt time.Time
 	OutputDir    string
 	Context      context.Context
 }
@@ -186,16 +188,19 @@ func (wp *WorkerPool) executeTask(ctx context.Context, job TaskJob) TaskResult {
 		ExitCode:       -1,
 	}
 
-	// Create output directory for this workflow run
-	runDir := filepath.Join(wp.outputDir, fmt.Sprintf("%d", job.TaskInstance.WorkflowRunID))
-	if err := os.MkdirAll(runDir, 0755); err != nil {
-		result.Error = fmt.Errorf("failed to create run directory: %w", err)
+	// Build directory structure: workflow-name/YYYY-MM-DD/HH-MM-SS/task-name
+	dateDir := job.RunStartedAt.Format("2006-01-02")
+	timeDir := job.RunStartedAt.Format("15-04-05")
+	taskDir := filepath.Join(wp.outputDir, job.WorkflowName, dateDir, timeDir, job.Task.Name)
+
+	if err := os.MkdirAll(taskDir, 0755); err != nil {
+		result.Error = fmt.Errorf("failed to create task directory: %w", err)
 		return result
 	}
 
 	// Create output file paths
-	stdoutPath := filepath.Join(runDir, fmt.Sprintf("%d.stdout", job.TaskInstance.ID))
-	stderrPath := filepath.Join(runDir, fmt.Sprintf("%d.stderr", job.TaskInstance.ID))
+	stdoutPath := filepath.Join(taskDir, "stdout.log")
+	stderrPath := filepath.Join(taskDir, "stderr.log")
 
 	result.StdoutPath = stdoutPath
 	result.StderrPath = stderrPath

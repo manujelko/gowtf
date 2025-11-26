@@ -1,0 +1,97 @@
+{{ define "content" }}
+<div class="run-header">
+    <h2>{{ .Workflow.Name }} - Run #{{ .WorkflowRun.ID }}</h2>
+    <p>
+        <span class="badge status-{{ .WorkflowRun.Status }}">{{ .WorkflowRun.Status }}</span>
+        Started: {{ .WorkflowRun.StartedAt.Format "Jan 02 15:04:05" }}
+        {{ if .WorkflowRun.FinishedAt }}
+            | Finished: {{ .WorkflowRun.FinishedAt.Format "Jan 02 15:04:05" }}
+        {{ end }}
+    </p>
+    <a href="/workflow/{{ .Workflow.ID }}">← Back to Workflow</a>
+</div>
+
+<div id="run-graph-container">
+    <div id="run-graph-content">
+        {{ template "run-graph" . }}
+    </div>
+</div>
+{{ end }}
+
+{{ define "run-graph" }}
+    <div class="graph-container">
+        <svg class="graph-svg" viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+            <!-- Draw edges first (so they appear behind nodes) -->
+            {{ range .Edges }}
+                <line x1="{{ .FromX }}" y1="{{ .FromY }}" 
+                      x2="{{ .ToX }}" y2="{{ .ToY }}" 
+                      class="graph-edge" 
+                      stroke="var(--border-color)" 
+                      stroke-width="2" 
+                      marker-end="url(#arrowhead)"/>
+            {{ end }}
+
+            <!-- Draw nodes -->
+            {{ range .Nodes }}
+            <g class="graph-node-group" style="cursor: pointer;">
+                <circle cx="{{ .X }}" cy="{{ .Y }}" r="40" 
+                        class="graph-node status-{{ .State }}" 
+                        data-task-id="{{ .Task.ID }}"
+                        data-task-name="{{ .Task.Name }}"
+                        data-state="{{ .State }}"
+                        {{ if .Instance }}data-instance-id="{{ .Instance.ID }}"{{ end }}
+                        style="cursor: pointer;"/>
+                <text x="{{ .X }}" y="{{ .Y }}" 
+                      text-anchor="middle" 
+                      dominant-baseline="middle" 
+                      class="graph-node-label"
+                      font-size="12"
+                      font-weight="500"
+                      pointer-events="none">
+                    {{ .Task.Name }}
+                </text>
+            </g>
+            {{ end }}
+
+            <!-- Arrow marker definition -->
+            <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="10" 
+                        refX="9" refY="3" orient="auto">
+                    <polygon points="0 0, 10 3, 0 6" fill="var(--border-color)" />
+                </marker>
+            </defs>
+        </svg>
+    </div>
+
+    <div class="graph-legend">
+        <h3>Task States</h3>
+        <div class="legend-items">
+            <div class="legend-item">
+                <span class="legend-color status-success"></span>
+                <span>Success</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-failed"></span>
+                <span>Failed</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-running"></span>
+                <span>Running</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-pending"></span>
+                <span>Pending</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-queued"></span>
+                <span>Queued</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-skipped"></span>
+                <span>Skipped</span>
+            </div>
+        </div>
+    </div>
+</div>
+{{ end }}
+

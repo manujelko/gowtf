@@ -144,14 +144,23 @@ func (e *Executor) Stop() {
 
 // handleWorkflowRun processes a workflow run event
 func (e *Executor) handleWorkflowRun(ctx context.Context, event scheduler.WorkflowRunEvent) error {
-	log.Printf("Executor: Processing workflow run %d for workflow %d", event.WorkflowRunID, event.WorkflowID)
+	// Fetch workflow name for logging
+	workflow, err := e.workflowStore.GetByID(ctx, event.WorkflowID)
+	var workflowName string
+	if err != nil || workflow == nil {
+		workflowName = fmt.Sprintf("ID:%d", event.WorkflowID)
+	} else {
+		workflowName = workflow.Name
+	}
+
+	log.Printf("Executor: Processing workflow run %d for workflow %q (ID: %d)", event.WorkflowRunID, workflowName, event.WorkflowID)
 
 	// Process in a goroutine to allow concurrent workflow runs
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		if err := e.processWorkflowRun(ctx, event.WorkflowRunID, event.WorkflowID); err != nil {
-			log.Printf("Executor: Error processing workflow run %d: %v", event.WorkflowRunID, err)
+			log.Printf("Executor: Error processing workflow run %d for workflow %q: %v", event.WorkflowRunID, workflowName, err)
 		}
 	}()
 
@@ -160,6 +169,24 @@ func (e *Executor) handleWorkflowRun(ctx context.Context, event scheduler.Workfl
 
 // processWorkflowRun orchestrates task execution for a workflow run
 func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workflowID int) error {
+	// Fetch workflow to get name
+	workflow, err := e.workflowStore.GetByID(ctx, workflowID)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow: %w", err)
+	}
+	if workflow == nil {
+		return fmt.Errorf("workflow %d not found", workflowID)
+	}
+
+	// Fetch workflow run to get start time
+	workflowRun, err := e.workflowRunStore.GetByID(ctx, workflowRunID)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow run: %w", err)
+	}
+	if workflowRun == nil {
+		return fmt.Errorf("workflow run %d not found", workflowRunID)
+	}
+
 	// Update workflow run status to running
 	if err := e.workflowRunStore.UpdateStatus(ctx, workflowRunID, models.RunRunning, nil); err != nil {
 		return fmt.Errorf("failed to update workflow run status: %w", err)
@@ -243,7 +270,7 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 					return fmt.Errorf("failed to update workflow run status: %w", err)
 				}
 
-				log.Printf("Executor: Workflow run %d completed with status %s", workflowRunID, status.String())
+				log.Printf("Executor: Workflow run %d for workflow %q (ID: %d) completed with status %s", workflowRunID, workflow.Name, workflowID, status.String())
 				return nil
 			}
 
@@ -288,7 +315,7 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 				if err := e.markTaskSkipped(ctx, ti); err != nil {
 					log.Printf("Executor: Failed to mark task %d as skipped: %v", ti.TaskID, err)
 				} else {
-					log.Printf("Executor: Task %d (%s) skipped due to condition", ti.TaskID, task.Name)
+					log.Printf("Executor: Task %q (ID: %d) in workflow %q skipped due to condition", task.Name, ti.TaskID, workflow.Name)
 				}
 				continue
 			}
@@ -305,7 +332,7 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 				continue
 			}
 
-			log.Printf("Executor: Task %d (%s) marked as running, submitting to worker pool", ti.TaskID, task.Name)
+			log.Printf("Executor: Task %q (ID: %d) in workflow %q marked as running, submitting to worker pool", task.Name, ti.TaskID, workflow.Name)
 
 			// Create per-task cancellation context for health monitor
 			taskCtx, taskCancel := context.WithCancel(ctx)
@@ -317,6 +344,8 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 			job := worker.TaskJob{
 				TaskInstance: ti,
 				Task:         task,
+				WorkflowName: workflow.Name,
+				RunStartedAt: workflowRun.StartedAt,
 				OutputDir:    "", // Worker pool uses its own output directory
 				Context:      taskCtx,
 			}

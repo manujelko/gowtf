@@ -1,0 +1,83 @@
+{{ define "content" }}
+<h2>Workflows</h2>
+<div id="workflow-table" hx-trigger="every 5s" hx-get="/" hx-swap="outerHTML">
+    {{ template "workflow-table" . }}
+</div>
+{{ end }}
+
+{{ define "workflow-table" }}
+<div id="workflow-table" hx-trigger="every 5s" hx-get="/" hx-swap="outerHTML">
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Schedule</th>
+                <th>Runs</th>
+                <th>Last Run Time</th>
+                <th>Next Run Time</th>
+                <th>Last Updated</th>
+                <th>Enabled</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{ range .Workflows }}
+            <tr {{ if .ErrorMsg }}class="workflow-error"{{ end }}>
+                <td>
+                    <strong><a href="/workflow/{{ .ID }}">{{ .Name }}</a></strong>
+                    {{ if .ErrorMsg }}
+                        <div class="error-message" title="{{ .ErrorMsg }}">
+                            ⚠️ {{ .ErrorMsg }}
+                        </div>
+                    {{ end }}
+                </td>
+                <td><code>{{ .Schedule }}</code></td>
+                <td>
+                    <div class="status-circles">
+                        {{ range .RecentRuns }}
+                            <a href="/run/{{ .ID }}" class="status-circle status-{{ .Status }}" title="{{ .Status }}"></a>
+                        {{ end }}
+                        {{ if eq (len .RecentRuns) 0 }}
+                            <span class="status-circle status-none" title="No runs"></span>
+                        {{ end }}
+                    </div>
+                </td>
+                <td>
+                    {{ if .LatestRun }}
+                        {{ .LatestRun.StartedAt.Format "Jan 02 15:04:05" }}
+                    {{ else }}
+                        —
+                    {{ end }}
+                </td>
+                <td>
+                    {{ if .NextRunAt }}
+                        {{ .NextRunAt.Format "Jan 02 15:04:05" }}
+                    {{ else }}
+                        —
+                    {{ end }}
+                </td>
+                <td>{{ .UpdatedAt.Format "Jan 02 15:04" }}</td>
+                <td>
+                    <button 
+                        class="toggle-btn {{ if .Enabled }}enabled{{ else }}disabled{{ end }}"
+                        hx-post="/api/workflow/{{ .ID }}/toggle"
+                        hx-swap="none"
+                        hx-trigger="click"
+                        hx-on::after-request="if(event.detail.xhr.status === 200) location.reload()"
+                        title="{{ if .Enabled }}Disable{{ else }}Enable{{ end }} workflow">
+                        {{ if .Enabled }}✓{{ else }}✗{{ end }}
+                    </button>
+                </td>
+            </tr>
+            {{ else }}
+            <tr>
+                <td colspan="7" style="text-align: center; padding: 2rem;">
+                    No workflows found.
+                </td>
+            </tr>
+            {{ end }}
+        </tbody>
+    </table>
+</div>
+{{ end }}
+
+

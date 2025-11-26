@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoWTF</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/htmx.min.js"></script>
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/graph.js"></script>
+</head>
+<body>
+    <nav>
+        <div class="logo">
+            <a href="/"><strong>GoWTF</strong></a>
+        </div>
+        <ul>
+            <li><button id="theme-toggle" class="btn theme-icon" title="Toggle Theme">☼</button></li>
+        </ul>
+    </nav>
+
+    <main>
+        {{ block "content" . }}{{ end }}
+    </main>
+</body>
+</html>
+
+

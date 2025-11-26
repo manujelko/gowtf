@@ -52,6 +52,7 @@ type Watcher struct {
 	cancel         context.CancelFunc
 	knownFiles     map[string]string // filepath -> hash
 	fileToWorkflow map[string]string // filepath -> workflow name
+	fileErrors     map[string]string // filepath -> error message
 	mu             sync.RWMutex
 	debounceTimer  *time.Timer
 	pendingFiles   map[string]struct{}
@@ -88,6 +89,7 @@ func NewWatcher(db *sql.DB, watchDir string, notifyCh chan<- WorkflowEvent) (*Wa
 		cancel:         cancel,
 		knownFiles:     make(map[string]string),
 		fileToWorkflow: make(map[string]string),
+		fileErrors:     make(map[string]string),
 		pendingFiles:   make(map[string]struct{}),
 	}, nil
 }
@@ -143,9 +145,19 @@ func (w *Watcher) syncWorkflow(filePath string) error {
 	// Load and validate workflow
 	wf, err := workflow.Load(filePath)
 	if err != nil {
+		errMsg := fmt.Sprintf("Failed to load workflow: %v", err)
 		log.Printf("Failed to load workflow from %s: %v", filePath, err)
+		// Store error for UI display
+		w.mu.Lock()
+		w.fileErrors[filePath] = errMsg
+		w.mu.Unlock()
 		return fmt.Errorf("validation error: %w", err)
 	}
+
+	// Clear any previous error for this file
+	w.mu.Lock()
+	delete(w.fileErrors, filePath)
+	w.mu.Unlock()
 
 	// Check if workflow exists (outside transaction for now)
 	existingWf, err := w.workflowStore.GetByName(w.ctx, wf.Name)
@@ -171,7 +183,7 @@ func (w *Watcher) syncWorkflow(filePath string) error {
 			Schedule: wf.Schedule,
 			Env:      wf.Env,
 			Hash:     newHash,
-			Enabled:  true,
+			Enabled:  false, // Disabled by default
 		}
 
 		if err := w.workflowStore.InsertTx(w.ctx, tx, dbWf); err != nil {
@@ -287,12 +299,13 @@ func (w *Watcher) deleteWorkflow(workflowName string) error {
 		return fmt.Errorf("failed to delete workflow: %w", err)
 	}
 
-	// Remove from known files
+	// Remove from known files and clear errors
 	w.mu.Lock()
 	for path, name := range w.fileToWorkflow {
 		if name == workflowName {
 			delete(w.knownFiles, path)
 			delete(w.fileToWorkflow, path)
+			delete(w.fileErrors, path)
 			break
 		}
 	}
@@ -442,10 +455,7 @@ func (w *Watcher) Run() error {
 					w.scheduleDebounce()
 
 				case event.Op&fsnotify.Remove == fsnotify.Remove:
-					fallthrough
-				case event.Op&fsnotify.Rename == fsnotify.Rename:
-					// Look up workflow name from file path mapping
-					// We can't load the YAML because the file is deleted/renamed
+					// File was deleted, look up workflow name from mapping
 					w.mu.RLock()
 					workflowName, exists := w.fileToWorkflow[event.Name]
 					w.mu.RUnlock()
@@ -454,10 +464,34 @@ func (w *Watcher) Run() error {
 							log.Printf("Failed to delete workflow %s: %v", workflowName, err)
 						}
 					} else {
-						// File was deleted/renamed but we don't have it in our mapping
+						// File was deleted but we don't have it in our mapping
 						// This can happen if the file was deleted before we could sync it
-						// Just log and continue - we can't determine the workflow name
-						log.Printf("File %s was deleted/renamed but workflow name is unknown (file was never synced)", event.Name)
+						log.Printf("File %s was deleted but workflow name is unknown (file was never synced)", event.Name)
+					}
+
+				case event.Op&fsnotify.Rename == fsnotify.Rename:
+					// Rename can mean:
+					// 1. File was renamed/deleted (file no longer exists)
+					// 2. File was created via rename (common with editors - write to temp then rename)
+					// Check if file still exists to determine which case
+					if _, err := os.Stat(event.Name); os.IsNotExist(err) {
+						// File doesn't exist - it was deleted/renamed away
+						w.mu.RLock()
+						workflowName, exists := w.fileToWorkflow[event.Name]
+						w.mu.RUnlock()
+						if exists {
+							if err := w.deleteWorkflow(workflowName); err != nil {
+								log.Printf("Failed to delete workflow %s: %v", workflowName, err)
+							}
+						} else {
+							log.Printf("File %s was renamed/deleted but workflow name is unknown (file was never synced)", event.Name)
+						}
+					} else {
+						// File exists - it was created/renamed into place, treat as Create/Write
+						w.debounceMu.Lock()
+						w.pendingFiles[event.Name] = struct{}{}
+						w.debounceMu.Unlock()
+						w.scheduleDebounce()
 					}
 				}
 
@@ -476,4 +510,38 @@ func (w *Watcher) Run() error {
 	// Wait for context cancellation
 	<-w.ctx.Done()
 	return nil
+}
+
+// GetFileErrors returns a map of file paths to error messages
+func (w *Watcher) GetFileErrors() map[string]string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	// Return a copy to avoid race conditions
+	errors := make(map[string]string)
+	for k, v := range w.fileErrors {
+		errors[k] = v
+	}
+	return errors
+}
+
+// GetErrorsByWorkflowName returns a map of workflow names to error messages
+func (w *Watcher) GetErrorsByWorkflowName() map[string]string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	// Build reverse map: workflow name -> error
+	errorsByWorkflow := make(map[string]string)
+	for filePath, errMsg := range w.fileErrors {
+		// Try to find workflow name from fileToWorkflow map
+		if workflowName, exists := w.fileToWorkflow[filePath]; exists {
+			errorsByWorkflow[workflowName] = errMsg
+		} else {
+			// Fallback: try to extract from filename
+			baseName := filepath.Base(filePath)
+			nameWithoutExt := strings.TrimSuffix(strings.TrimSuffix(baseName, ".yaml"), ".yml")
+			errorsByWorkflow[nameWithoutExt] = errMsg
+		}
+	}
+	return errorsByWorkflow
 }

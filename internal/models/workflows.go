@@ -27,6 +27,7 @@ type WorkflowStore struct {
 	getByQ         string
 	getByIDQ       string
 	getAllEnabledQ string
+	getAllQ        string
 	updateQ        string
 	deleteQ        string
 }
@@ -48,6 +49,10 @@ func NewWorkflowStore(db *sql.DB) (*WorkflowStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	getAllQ, err := workflowQueries.ReadFile("queries/get_all_workflows.sql")
+	if err != nil {
+		return nil, err
+	}
 	updateQ, err := workflowQueries.ReadFile("queries/update_workflow.sql")
 	if err != nil {
 		return nil, err
@@ -63,6 +68,7 @@ func NewWorkflowStore(db *sql.DB) (*WorkflowStore, error) {
 		getByQ:         string(getByQ),
 		getByIDQ:       string(getByIDQ),
 		getAllEnabledQ: string(getAllEnabledQ),
+		getAllQ:        string(getAllQ),
 		updateQ:        string(updateQ),
 		deleteQ:        string(deleteQ),
 	}, nil
@@ -162,6 +168,51 @@ func (s *WorkflowStore) GetByID(ctx context.Context, id int) (*Workflow, error) 
 
 func (s *WorkflowStore) GetAllEnabled(ctx context.Context) ([]*Workflow, error) {
 	rows, err := s.DB.QueryContext(ctx, s.getAllEnabledQ)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var workflows []*Workflow
+
+	for rows.Next() {
+		var (
+			w       Workflow
+			envJSON sql.NullString
+			enabled int
+		)
+
+		err := rows.Scan(
+			&w.ID,
+			&w.Name,
+			&w.Schedule,
+			&envJSON,
+			&w.Hash,
+			&enabled,
+			&w.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		w.Enabled = enabled == 1
+		w.Env, err = decodeEnv(envJSON)
+		if err != nil {
+			return nil, err
+		}
+
+		workflows = append(workflows, &w)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return workflows, nil
+}
+
+func (s *WorkflowStore) GetAll(ctx context.Context) ([]*Workflow, error) {
+	rows, err := s.DB.QueryContext(ctx, s.getAllQ)
 	if err != nil {
 		return nil, err
 	}

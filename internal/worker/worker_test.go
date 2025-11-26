@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -122,13 +123,17 @@ func TestWorkerPool_ExecuteTask(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   "test-task",
 		Script: "echo 'Hello, World!'",
 		Env:    make(map[string]string),
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 
@@ -218,13 +223,17 @@ func TestWorkerPool_ExecuteTaskWithFailure(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   "test-task",
 		Script: "exit 42", // Exit with code 42
 		Env:    make(map[string]string),
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 
@@ -278,14 +287,18 @@ func TestWorkerPool_ExecuteTaskWithTimeout(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:      10,
+		Name:    "test-task",
 		Script:  "sleep 10", // Sleep for 10 seconds
 		Timeout: "100ms",    // But timeout after 100ms
 		Env:     make(map[string]string),
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 
@@ -341,6 +354,7 @@ func TestWorkerPool_ConcurrentExecution(t *testing.T) {
 
 		task := &models.WorkflowTask{
 			ID:     10,
+			Name:   fmt.Sprintf("task-%d", i),
 			Script: "echo 'Task " + string(rune('A'+i)) + "'",
 			Env:    make(map[string]string),
 		}
@@ -414,15 +428,19 @@ func TestWorkerPool_EnvironmentVariables(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   "test-task",
 		Script: "echo $TEST_VAR",
 		Env: map[string]string{
 			"TEST_VAR": "Hello from env",
 		},
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 
@@ -473,6 +491,9 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 
 	workflowRunID := 123
 	taskInstanceID := 456
+	workflowName := "test-workflow"
+	runStartTime := time.Date(2025, 11, 26, 13, 11, 23, 0, time.UTC)
+	taskName := "test-task"
 
 	taskInstance := &models.TaskInstance{
 		ID:            taskInstanceID,
@@ -484,6 +505,7 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   taskName,
 		Script: "echo 'test'",
 		Env:    make(map[string]string),
 	}
@@ -491,6 +513,8 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: workflowName,
+		RunStartedAt: runStartTime,
 		Context:      ctx,
 	}
 
@@ -500,9 +524,9 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 
 	select {
 	case result := <-pool.Results():
-		// Verify file paths follow expected structure
-		expectedStdoutPath := filepath.Join(outputDir, "123", "456.stdout")
-		expectedStderrPath := filepath.Join(outputDir, "123", "456.stderr")
+		// Verify file paths follow expected structure: workflow-name/YYYY-MM-DD/HH-MM-SS/task-name/stdout.log
+		expectedStdoutPath := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName, "stdout.log")
+		expectedStderrPath := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName, "stderr.log")
 
 		if result.StdoutPath != expectedStdoutPath {
 			t.Errorf("Expected stdout path %s, got %s", expectedStdoutPath, result.StdoutPath)
@@ -513,9 +537,9 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 		}
 
 		// Verify directory was created
-		runDir := filepath.Join(outputDir, "123")
-		if _, err := os.Stat(runDir); os.IsNotExist(err) {
-			t.Errorf("Run directory does not exist: %s", runDir)
+		taskDir := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName)
+		if _, err := os.Stat(taskDir); os.IsNotExist(err) {
+			t.Errorf("Task directory does not exist: %s", taskDir)
 		}
 
 	case <-time.After(5 * time.Second):
@@ -547,13 +571,17 @@ func TestWorkerPool_SubmitBeforeStart(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   "test-task",
 		Script: "echo 'test'",
 		Env:    make(map[string]string),
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 
@@ -597,13 +625,17 @@ func TestWorkerPool_SubmitAfterStop(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   "test-task",
 		Script: "echo 'test'",
 		Env:    make(map[string]string),
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 
@@ -651,13 +683,17 @@ func TestWorkerPool_HeartbeatSending(t *testing.T) {
 	// Create a task that runs for a while to allow multiple heartbeats
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   "test-task",
 		Script: "sleep 0.5", // Sleep for 500ms
 		Env:    make(map[string]string),
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 
@@ -751,13 +787,17 @@ func TestWorkerPool_HeartbeatWithoutChannel(t *testing.T) {
 
 	task := &models.WorkflowTask{
 		ID:     10,
+		Name:   "test-task",
 		Script: "echo 'test'",
 		Env:    make(map[string]string),
 	}
 
+	now := time.Now()
 	job := TaskJob{
 		TaskInstance: taskInstance,
 		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
 		Context:      ctx,
 	}
 

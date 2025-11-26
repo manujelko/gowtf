@@ -58,6 +58,7 @@ type WorkflowRunStore struct {
 	updateStatusQ   string
 	getByIDQ        string
 	getLatestForWfQ string
+	getRunsForWfQ   string
 }
 
 func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
@@ -77,6 +78,10 @@ func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	getRunsForWfQ, err := workflowRunQueries.ReadFile("queries/workflow_runs/get_runs_for_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
 
 	return &WorkflowRunStore{
 		DB:              db,
@@ -84,6 +89,7 @@ func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
 		updateStatusQ:   string(updateStatusQ),
 		getByIDQ:        string(getByIDQ),
 		getLatestForWfQ: string(getLatestForWfQ),
+		getRunsForWfQ:   string(getRunsForWfQ),
 	}, nil
 }
 
@@ -166,6 +172,51 @@ func (s *WorkflowRunStore) GetLatestForWorkflow(ctx context.Context, workflowID 
 	}
 
 	return &wr, nil
+}
+
+func (s *WorkflowRunStore) GetRunsForWorkflow(ctx context.Context, workflowID int, limit int) ([]*WorkflowRun, error) {
+	rows, err := s.DB.QueryContext(ctx, s.getRunsForWfQ, workflowID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []*WorkflowRun
+	for rows.Next() {
+		var (
+			wr        WorkflowRun
+			statusStr string
+			finished  sql.NullTime
+		)
+
+		err := rows.Scan(
+			&wr.ID,
+			&wr.WorkflowID,
+			&statusStr,
+			&wr.StartedAt,
+			&finished,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		status, err := ParseWorkflowRunStatus(statusStr)
+		if err != nil {
+			return nil, err
+		}
+		wr.Status = status
+
+		if finished.Valid {
+			t := finished.Time
+			wr.FinishedAt = &t
+		}
+
+		runs = append(runs, &wr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return runs, nil
 }
 
 func (s *WorkflowRunStore) UpdateStatus(ctx context.Context, id int, status WorkflowRunStatus, finishedAt *time.Time) error {

@@ -1,0 +1,654 @@
+:root {
+    --bg-color: #ffffff;
+    --text-color: #000000;
+    --border-color: #e0e0e0;
+    --nav-bg: #f5f5f5;
+    --status-success: #28a745;
+    --status-failure: #dc3545;
+    --status-running: #ffc107;
+    --status-pending: #6c757d;
+    --status-queued: #17a2b8;
+    --status-skipped: #e91e63;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg-color: #000000;
+        --text-color: #ffffff;
+        --border-color: #333333;
+        --nav-bg: #111111;
+    }
+}
+
+body.dark {
+    --bg-color: #000000;
+    --text-color: #ffffff;
+    --border-color: #333333;
+    --nav-bg: #111111;
+}
+
+body.light {
+    --bg-color: #ffffff;
+    --text-color: #000000;
+    --border-color: #e0e0e0;
+    --nav-bg: #f5f5f5;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    line-height: 1.5;
+}
+
+a {
+    color: var(--text-color);
+    text-decoration: none;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+table a {
+    color: inherit;
+    font-weight: inherit;
+}
+
+table a:hover {
+    text-decoration: underline;
+}
+
+nav {
+    background-color: var(--nav-bg);
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+nav .logo {
+    display: flex;
+    align-items: center;
+    line-height: 1.5;
+}
+
+nav ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+nav ul li {
+    display: flex;
+    align-items: center;
+    line-height: 1.5;
+}
+
+nav ul li a {
+    display: flex;
+    align-items: center;
+    line-height: 1.5;
+}
+
+main {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+
+th, td {
+    text-align: left;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+th {
+    font-weight: 600;
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.25em 0.4em;
+    font-size: 75%;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: baseline;
+    border-radius: 0.25rem;
+    color: #fff;
+}
+
+.status-success { background-color: var(--status-success); }
+.status-failure { background-color: var(--status-failure); }
+.status-running { background-color: var(--status-running); color: #000; }
+.status-pending { background-color: var(--status-pending); }
+.status-queued { background-color: var(--status-queued); }
+.status-skipped { background-color: var(--status-skipped); }
+
+.status-circles {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.status-circle {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.status-circle.status-pending {
+    background-color: var(--status-pending);
+}
+
+.status-circle.status-running {
+    background-color: var(--status-running);
+}
+
+.status-circle.status-success {
+    background-color: var(--status-success);
+}
+
+.status-circle.status-failed {
+    background-color: var(--status-failure);
+}
+
+.status-circle.status-none {
+    background-color: var(--border-color);
+    opacity: 0.5;
+}
+
+.status-circles a {
+    display: inline-block;
+    text-decoration: none;
+}
+
+.status-circles a:hover {
+    transform: scale(1.2);
+    transition: transform 0.1s;
+}
+
+.btn {
+    display: inline-block;
+    font-weight: 400;
+    text-align: center;
+    vertical-align: middle;
+    user-select: none;
+    border: 1px solid var(--border-color);
+    padding: 0.375rem 0.75rem;
+    font-size: 1rem;
+    line-height: 1.5;
+    border-radius: 0.25rem;
+    background-color: var(--nav-bg);
+    color: var(--text-color);
+    cursor: pointer;
+    font-family: inherit;
+}
+
+nav .btn {
+    margin: 0;
+}
+
+.btn:hover {
+    filter: brightness(0.9);
+}
+
+.task-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.task-card {
+    border: 1px solid var(--border-color);
+    padding: 1rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+}
+
+.workflow-header {
+    margin-bottom: 2rem;
+}
+
+.workflow-header h2 {
+    margin: 0 0 0.5rem 0;
+}
+
+.workflow-header p {
+    margin: 0.5rem 0;
+}
+
+.workflow-header a {
+    display: inline-block;
+    margin-top: 1rem;
+    color: var(--text-color);
+    text-decoration: underline;
+}
+
+.run-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: 4px;
+    margin-bottom: 2rem;
+}
+
+.grid-cell {
+    aspect-ratio: 1;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+    position: relative;
+    text-decoration: none;
+    color: inherit;
+}
+
+.grid-cell:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 1;
+}
+
+.run-grid a.grid-cell {
+    display: flex;
+    text-decoration: none;
+    color: inherit;
+}
+
+.run-grid a.grid-cell:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 1;
+}
+
+.grid-cell.status-success {
+    background-color: var(--status-success);
+    border-color: var(--status-success);
+}
+
+.grid-cell.status-failed {
+    background-color: var(--status-failure);
+    border-color: var(--status-failure);
+}
+
+.grid-cell.status-running {
+    background-color: var(--status-running);
+    border-color: var(--status-running);
+    color: #000;
+}
+
+.grid-cell.status-pending {
+    background-color: var(--status-pending);
+    border-color: var(--status-pending);
+}
+
+.grid-cell.future {
+    background-color: transparent;
+    border-color: var(--border-color);
+    opacity: 0.5;
+}
+
+.cell-time {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: inherit;
+}
+
+.grid-cell.future .cell-time {
+    color: var(--text-color);
+    opacity: 0.6;
+}
+
+.grid-legend {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.grid-legend h3 {
+    margin: 0 0 1rem 0;
+    font-size: 1rem;
+}
+
+.legend-items {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.legend-color {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    display: inline-block;
+}
+
+.legend-color.status-success {
+    background-color: var(--status-success);
+    border-color: var(--status-success);
+}
+
+.legend-color.status-failed {
+    background-color: var(--status-failure);
+    border-color: var(--status-failure);
+}
+
+.legend-color.status-running {
+    background-color: var(--status-running);
+    border-color: var(--status-running);
+}
+
+.legend-color.status-pending {
+    background-color: var(--status-pending);
+    border-color: var(--status-pending);
+}
+
+.legend-color.future {
+    background-color: transparent;
+    border-color: var(--border-color);
+    opacity: 0.5;
+}
+
+.run-header {
+    margin-bottom: 2rem;
+}
+
+.run-header h2 {
+    margin: 0 0 0.5rem 0;
+}
+
+.run-header p {
+    margin: 0.5rem 0;
+}
+
+.run-header a {
+    display: inline-block;
+    margin-top: 1rem;
+    color: var(--text-color);
+    text-decoration: underline;
+}
+
+.graph-container {
+    width: 100%;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--bg-color);
+    margin-bottom: 2rem;
+}
+
+.graph-svg {
+    width: 100%;
+    height: 700px;
+    display: block;
+    cursor: grab;
+}
+
+.graph-svg:active {
+    cursor: grabbing;
+}
+
+.graph-edge {
+    stroke: var(--border-color);
+    stroke-width: 2;
+}
+
+.graph-node-group {
+    cursor: pointer;
+}
+
+.graph-node {
+    fill: var(--status-pending);
+    stroke: var(--border-color);
+    stroke-width: 2;
+    transition: all 0.2s;
+}
+
+.graph-node:hover {
+    stroke-width: 3;
+    filter: brightness(1.1);
+}
+
+.graph-node.status-success {
+    fill: var(--status-success);
+}
+
+.graph-node.status-failed {
+    fill: var(--status-failure);
+}
+
+.graph-node.status-running {
+    fill: var(--status-running);
+}
+
+.graph-node.status-pending {
+    fill: var(--status-pending);
+}
+
+.graph-node.status-queued {
+    fill: var(--status-queued);
+}
+
+.graph-node.status-skipped {
+    fill: var(--status-skipped);
+}
+
+.graph-node-label {
+    fill: var(--text-color);
+    pointer-events: none;
+    user-select: none;
+}
+
+.graph-node.status-running .graph-node-label {
+    fill: #000;
+}
+
+.graph-legend {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.graph-legend h3 {
+    margin: 0 0 1rem 0;
+    font-size: 1rem;
+}
+
+.toggle-btn {
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--border-color);
+    background: var(--bg-color);
+    color: var(--text-color);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    min-width: 2rem;
+}
+
+.toggle-btn:hover {
+    background: var(--border-color);
+}
+
+.toggle-btn.enabled {
+    background: var(--status-success);
+    color: white;
+    border-color: var(--status-success);
+}
+
+.toggle-btn.disabled {
+    background: var(--status-failure);
+    color: white;
+    border-color: var(--status-failure);
+}
+
+.workflow-error {
+    background-color: rgba(220, 53, 69, 0.1);
+}
+
+.error-message {
+    color: var(--status-failure);
+    font-size: 0.75rem;
+    margin-top: 0.25rem;
+    font-weight: normal;
+}
+
+.theme-icon {
+    font-size: 1.2rem;
+    filter: grayscale(100%);
+    opacity: 0.8;
+}
+
+.theme-icon:hover {
+    opacity: 1;
+}
+
+.log-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.log-modal-content {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    width: 90%;
+    max-width: 900px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.log-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.log-modal-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.log-modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-color);
+    padding: 0;
+    width: 2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+}
+
+.log-modal-close:hover {
+    background: var(--border-color);
+}
+
+.log-modal-body {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+}
+
+.log-info {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    font-size: 0.875rem;
+}
+
+.log-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.log-tab {
+    padding: 0.75rem 1.5rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    color: var(--text-color);
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.log-tab:hover {
+    background: var(--nav-bg);
+}
+
+.log-tab.active {
+    border-bottom-color: var(--status-success);
+    color: var(--status-success);
+}
+
+.log-content {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+.log-output {
+    display: none;
+    padding: 1rem;
+    margin: 0;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background: var(--bg-color);
+    color: var(--text-color);
+    overflow-x: auto;
+}
+
+.log-output.active {
+    display: block;
+}
+
+
