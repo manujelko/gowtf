@@ -26,12 +26,12 @@ func retryDBOperation(maxRetries int, fn func() error) error {
 		if err == nil {
 			return nil
 		}
-		
+
 		// Only retry on SQLite busy errors
 		if !isSQLiteBusy(err) {
 			return err
 		}
-		
+
 		lastErr = err
 		if i < maxRetries-1 {
 			// Exponential backoff: 10ms, 20ms, 40ms, etc.

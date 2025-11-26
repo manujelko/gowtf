@@ -457,23 +457,23 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 			dx := fromNode.X - toNode.X
 			dy := fromNode.Y - toNode.Y
 			length := math.Sqrt(dx*dx + dy*dy)
-			
+
 			if length > 0 {
 				// Normalize direction vector
 				dx /= length
 				dy /= length
-				
+
 				// Calculate edge points (where line touches the node circles)
 				// Start point: edge of child node (toNode) in direction of ancestor
 				startX := toNode.X + dx*nodeRadius
 				startY := toNode.Y + dy*nodeRadius
-				
+
 				// End point: edge of ancestor node (fromNode) opposite direction
 				endX := fromNode.X - dx*nodeRadius
 				endY := fromNode.Y - dy*nodeRadius
-				
+
 				edges = append(edges, GraphEdge{
-					FromX: endX,   // Ancestor node edge
+					FromX: endX, // Ancestor node edge
 					FromY: endY,
 					ToX:   startX, // Child node edge
 					ToY:   startY,
