@@ -21,10 +21,19 @@
 {{ define "run-graph" }}
     <div class="graph-container">
         <svg class="graph-svg" viewBox="0 0 1000 700" xmlns="http://www.w3.org/2000/svg">
+            <!-- Arrow marker definition (must be in defs before use) -->
+            <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="10" 
+                        refX="9" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#999999" />
+                </marker>
+            </defs>
+            
             <!-- Draw edges first (so they appear behind nodes) -->
+            <!-- Edges go from child (To) to ancestor (From) so arrows point from children to ancestors -->
             {{ range .Edges }}
-                <line x1="{{ .FromX }}" y1="{{ .FromY }}" 
-                      x2="{{ .ToX }}" y2="{{ .ToY }}" 
+                <line x1="{{ .ToX }}" y1="{{ .ToY }}" 
+                      x2="{{ .FromX }}" y2="{{ .FromY }}" 
                       class="graph-edge" 
                       stroke="var(--border-color)" 
                       stroke-width="2" 
@@ -52,14 +61,6 @@
                 </text>
             </g>
             {{ end }}
-
-            <!-- Arrow marker definition -->
-            <defs>
-                <marker id="arrowhead" markerWidth="10" markerHeight="10" 
-                        refX="9" refY="3" orient="auto">
-                    <polygon points="0 0, 10 3, 0 6" fill="var(--border-color)" />
-                </marker>
-            </defs>
         </svg>
     </div>
 

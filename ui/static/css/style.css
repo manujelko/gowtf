@@ -8,7 +8,7 @@
     --status-running: #ffc107;
     --status-pending: #6c757d;
     --status-queued: #17a2b8;
-    --status-skipped: #e91e63;
+    --status-skipped: #ffb3d9;
 }
 
 @media (prefers-color-scheme: dark) {
