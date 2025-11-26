@@ -635,6 +635,14 @@ func (s *Server) handleToggleWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Notify scheduler of the enabled state change
+	if s.Scheduler != nil {
+		if err := s.Scheduler.HandleEnabledStateChange(ctx, id); err != nil {
+			// Log error but don't fail the request - the database is updated
+			fmt.Printf("Failed to notify scheduler of enabled state change for workflow %d: %v\n", id, err)
+		}
+	}
+
 	// Return success
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))

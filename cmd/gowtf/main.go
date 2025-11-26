@@ -108,7 +108,7 @@ func main() {
 
 	// Initialize web server
 	log.Printf("Initializing web server")
-	srv, err := server.New(db, w, *outputDir)
+	srv, err := server.New(db, w, s, *outputDir)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}

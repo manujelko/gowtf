@@ -18,6 +18,7 @@ type Server struct {
 	TaskInstances *models.TaskInstanceStore
 	Dependencies  *models.TaskDependenciesStore
 	Watcher       WatcherInterface
+	Scheduler     SchedulerInterface
 	OutputDir     string
 	httpServer    *http.Server
 }
@@ -28,7 +29,12 @@ type WatcherInterface interface {
 	GetErrorsByWorkflowName() map[string]string
 }
 
-func New(db *sql.DB, watcher WatcherInterface, outputDir string) (*Server, error) {
+// SchedulerInterface defines the interface for notifying the scheduler
+type SchedulerInterface interface {
+	HandleEnabledStateChange(ctx context.Context, workflowID int) error
+}
+
+func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string) (*Server, error) {
 	workflows, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, err
@@ -62,6 +68,7 @@ func New(db *sql.DB, watcher WatcherInterface, outputDir string) (*Server, error
 		TaskInstances: taskInstances,
 		Dependencies:  dependencies,
 		Watcher:       watcher,
+		Scheduler:     scheduler,
 		OutputDir:     outputDir,
 	}, nil
 }

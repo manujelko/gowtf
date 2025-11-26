@@ -170,6 +170,17 @@ func (s *Scheduler) handleWorkflowEvent(ctx context.Context, event watcher.Workf
 	return nil
 }
 
+// HandleEnabledStateChange handles a workflow enabled state change
+// This is called when a workflow is enabled/disabled via the UI
+func (s *Scheduler) HandleEnabledStateChange(ctx context.Context, workflowID int) error {
+	// Treat enabled state change as an update event
+	event := watcher.WorkflowEvent{
+		Type:       watcher.EventUpdated,
+		WorkflowID: workflowID,
+	}
+	return s.handleWorkflowEvent(ctx, event)
+}
+
 // scheduleWorkflow adds a workflow to the cron scheduler
 func (s *Scheduler) scheduleWorkflow(ctx context.Context, wf *models.Workflow) error {
 	if s.cron == nil {
