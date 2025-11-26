@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,65 @@ import (
 	"github.com/manujelko/gowtf/internal/models"
 	"github.com/manujelko/gowtf/internal/watcher"
 )
+
+// retryDBOperationWithTx retries a transaction operation with exponential backoff
+func retryDBOperationWithTx(ctx context.Context, db *sql.DB, maxRetries int, fn func(*sql.Tx) error) error {
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			if isSQLiteBusy(err) && i < maxRetries-1 {
+				backoff := time.Duration(1<<uint(i)) * 10 * time.Millisecond
+				time.Sleep(backoff)
+				lastErr = err
+				continue
+			}
+			return err
+		}
+
+		err = fn(tx)
+		if err != nil {
+			tx.Rollback()
+			if isSQLiteBusy(err) && i < maxRetries-1 {
+				backoff := time.Duration(1<<uint(i)) * 10 * time.Millisecond
+				time.Sleep(backoff)
+				lastErr = err
+				continue
+			}
+			return err
+		}
+
+		err = tx.Commit()
+		if err != nil {
+			if isSQLiteBusy(err) && i < maxRetries-1 {
+				backoff := time.Duration(1<<uint(i)) * 10 * time.Millisecond
+				time.Sleep(backoff)
+				lastErr = err
+				continue
+			}
+			return err
+		}
+
+		return nil
+	}
+	return lastErr
+}
+
+// isSQLiteBusy checks if an error is a SQLite busy/locked error
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "database is locked") ||
+		strings.Contains(errStr, "SQLITE_BUSY") ||
+		strings.Contains(errStr, "database is locked (5)")
+}
+
+// createTaskInstanceInTx creates a task instance within a transaction
+func (s *Scheduler) createTaskInstanceInTx(ctx context.Context, tx *sql.Tx, ti *models.TaskInstance) error {
+	return s.taskInstanceStore.InsertTx(ctx, tx, ti)
+}
 
 // WorkflowRunEvent represents a new workflow run that needs to be executed
 type WorkflowRunEvent struct {
@@ -282,23 +342,32 @@ func (s *Scheduler) onScheduleFire(workflowID int) {
 			return
 		}
 
-		// Create task instances for all tasks
-		for _, task := range tasks {
-			taskInstance := &models.TaskInstance{
-				WorkflowRunID: workflowRun.ID,
-				TaskID:        task.ID,
-				State:         models.TaskStatePending,
-				Attempt:       1,
-			}
+		// Create task instances for all tasks in a transaction to reduce contention
+		// Retry the entire transaction if we get a busy error
+		var createdCount int
+		err = retryDBOperationWithTx(ctx, s.db, 5, func(tx *sql.Tx) error {
+			createdCount = 0
+			for _, task := range tasks {
+				taskInstance := &models.TaskInstance{
+					WorkflowRunID: workflowRun.ID,
+					TaskID:        task.ID,
+					State:         models.TaskStatePending,
+					Attempt:       1,
+				}
 
-			if err := s.taskInstanceStore.Insert(ctx, taskInstance); err != nil {
-				log.Printf("Scheduler: Failed to create task instance for task %q (ID: %d) in workflow %q: %v", task.Name, task.ID, workflowName, err)
-				// Continue with other tasks
-				continue
+				if err := s.createTaskInstanceInTx(ctx, tx, taskInstance); err != nil {
+					return fmt.Errorf("failed to create task instance for task %q (ID: %d): %w", task.Name, task.ID, err)
+				}
+				createdCount++
 			}
+			return nil
+		})
+		if err != nil {
+			log.Printf("Scheduler: Failed to create task instances for workflow %q (ID: %d): %v", workflowName, workflowID, err)
+			return
 		}
 
-		log.Printf("Scheduler: Created %d task instances for workflow run %d (workflow: %q)", len(tasks), workflowRun.ID, workflowName)
+		log.Printf("Scheduler: Created %d task instances for workflow run %d (workflow: %q)", createdCount, workflowRun.ID, workflowName)
 
 		// Notify executor
 		if s.notifyCh != nil {

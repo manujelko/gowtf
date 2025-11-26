@@ -94,12 +94,18 @@ func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
 }
 
 func (s *WorkflowRunStore) Insert(ctx context.Context, workflowID int, status WorkflowRunStatus) (*WorkflowRun, error) {
-	res, err := s.DB.ExecContext(ctx, s.insertQ, workflowID, status.String())
-	if err != nil {
-		return nil, err
-	}
+	var res sql.Result
+	var id64 int64
+	err := retryDBOperation(5, func() error {
+		var execErr error
+		res, execErr = s.DB.ExecContext(ctx, s.insertQ, workflowID, status.String())
+		if execErr != nil {
+			return execErr
+		}
 
-	id64, err := res.LastInsertId()
+		id64, execErr = res.LastInsertId()
+		return execErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -227,6 +233,8 @@ func (s *WorkflowRunStore) UpdateStatus(ctx context.Context, id int, status Work
 		finishedAny = nil
 	}
 
-	_, err := s.DB.ExecContext(ctx, s.updateStatusQ, status.String(), finishedAny, id)
-	return err
+	return retryDBOperation(5, func() error {
+		_, err := s.DB.ExecContext(ctx, s.updateStatusQ, status.String(), finishedAny, id)
+		return err
+	})
 }

@@ -127,27 +127,34 @@ func (s *TaskInstanceStore) Insert(ctx context.Context, ti *TaskInstance) error 
 		stderrPath = *ti.StderrPath
 	}
 
-	res, err := s.DB.ExecContext(
-		ctx,
-		s.insertQ,
-		ti.WorkflowRunID,
-		ti.TaskID,
-		ti.State.String(),
-		ti.Attempt,
-		exitCode,
-		startedAt,
-		finishedAt,
-		stdoutPath,
-		stderrPath,
-	)
+	var res sql.Result
+	var id64 int64
+	err := retryDBOperation(5, func() error {
+		var execErr error
+		res, execErr = s.DB.ExecContext(
+			ctx,
+			s.insertQ,
+			ti.WorkflowRunID,
+			ti.TaskID,
+			ti.State.String(),
+			ti.Attempt,
+			exitCode,
+			startedAt,
+			finishedAt,
+			stdoutPath,
+			stderrPath,
+		)
+		if execErr != nil {
+			return execErr
+		}
+
+		id64, execErr = res.LastInsertId()
+		return execErr
+	})
 	if err != nil {
 		return err
 	}
 
-	id64, err := res.LastInsertId()
-	if err != nil {
-		return err
-	}
 	ti.ID = int(id64)
 	return nil
 }
@@ -177,19 +184,21 @@ func (s *TaskInstanceStore) Update(ctx context.Context, ti *TaskInstance) error 
 		stderrPath = *ti.StderrPath
 	}
 
-	_, err := s.DB.ExecContext(
-		ctx,
-		s.updateQ,
-		ti.State.String(),
-		ti.Attempt,
-		exitCode,
-		startedAt,
-		finishedAt,
-		stdoutPath,
-		stderrPath,
-		ti.ID,
-	)
-	return err
+	return retryDBOperation(5, func() error {
+		_, err := s.DB.ExecContext(
+			ctx,
+			s.updateQ,
+			ti.State.String(),
+			ti.Attempt,
+			exitCode,
+			startedAt,
+			finishedAt,
+			stdoutPath,
+			stderrPath,
+			ti.ID,
+		)
+		return err
+	})
 }
 
 func (s *TaskInstanceStore) GetForRun(ctx context.Context, workflowRunID int) ([]*TaskInstance, error) {
@@ -378,4 +387,55 @@ func (s *TaskInstanceStore) GetByID(ctx context.Context, id int) (*TaskInstance,
 	}
 
 	return &ti, nil
+}
+
+// InsertTx inserts a task instance within a transaction
+func (s *TaskInstanceStore) InsertTx(ctx context.Context, tx *sql.Tx, ti *TaskInstance) error {
+	var (
+		exitCode   interface{}
+		startedAt  interface{}
+		finishedAt interface{}
+		stdoutPath interface{}
+		stderrPath interface{}
+	)
+
+	if ti.ExitCode != nil {
+		exitCode = *ti.ExitCode
+	}
+	if ti.StartedAt != nil {
+		startedAt = *ti.StartedAt
+	}
+	if ti.FinishedAt != nil {
+		finishedAt = *ti.FinishedAt
+	}
+	if ti.StdoutPath != nil {
+		stdoutPath = *ti.StdoutPath
+	}
+	if ti.StderrPath != nil {
+		stderrPath = *ti.StderrPath
+	}
+
+	res, err := tx.ExecContext(
+		ctx,
+		s.insertQ,
+		ti.WorkflowRunID,
+		ti.TaskID,
+		ti.State.String(),
+		ti.Attempt,
+		exitCode,
+		startedAt,
+		finishedAt,
+		stdoutPath,
+		stderrPath,
+	)
+	if err != nil {
+		return err
+	}
+
+	id64, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	ti.ID = int(id64)
+	return nil
 }

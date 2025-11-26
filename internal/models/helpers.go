@@ -3,7 +3,44 @@ package models
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
+	"time"
 )
+
+// isSQLiteBusy checks if an error is a SQLite busy/locked error
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "database is locked") ||
+		strings.Contains(errStr, "SQLITE_BUSY") ||
+		strings.Contains(errStr, "database is locked (5)")
+}
+
+// retryDBOperation retries a database operation with exponential backoff if it encounters SQLITE_BUSY errors
+func retryDBOperation(maxRetries int, fn func() error) error {
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		
+		// Only retry on SQLite busy errors
+		if !isSQLiteBusy(err) {
+			return err
+		}
+		
+		lastErr = err
+		if i < maxRetries-1 {
+			// Exponential backoff: 10ms, 20ms, 40ms, etc.
+			backoff := time.Duration(1<<uint(i)) * 10 * time.Millisecond
+			time.Sleep(backoff)
+		}
+	}
+	return lastErr
+}
 
 func encodeEnv(env map[string]string) (sql.NullString, error) {
 	if env == nil {
