@@ -5,6 +5,33 @@
 1. Go with the flow when things are working as expected.
 2. Go what the f*ck when things go wrong.
 
+## Usage
+
+### Command-Line Flags
+
+- `--db`: Database file path (default: `./gowtf.db`)
+- `--watch-dir`: Directory to watch for workflow YAML files (default: `./workflows`)
+- `--output-dir`: Directory for task output/logs (default: `./output`)
+- `--workers`: Worker pool size (default: `4`)
+- `--http-addr`: HTTP server address (default: `:8080`)
+- `--api-key`: API key for protecting API endpoints (optional, but recommended for production)
+
+### API Authentication
+
+When the `--api-key` flag is set, all API endpoints (routes starting with `/api/`) require authentication. The API key can be provided in two ways:
+
+1. **HTTP Header**: Set the `X-API-Key` header
+   ```bash
+   curl -H "X-API-Key: your-api-key" http://localhost:8080/api/workflow/1/toggle
+   ```
+
+2. **Query Parameter**: Use the `api_key` query parameter
+   ```bash
+   curl "http://localhost:8080/api/workflow/1/toggle?api_key=your-api-key"
+   ```
+
+If the API key is missing or incorrect, the server will return `401 Unauthorized`. Static files and HTML pages remain accessible without authentication.
+
 ## Architecture
 
 1. **Watcher**

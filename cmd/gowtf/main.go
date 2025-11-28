@@ -28,6 +28,7 @@ func main() {
 	outputDir := flag.String("output-dir", "./output", "Directory for task output/logs")
 	workers := flag.Int("workers", 4, "Worker pool size")
 	httpAddr := flag.String("http-addr", ":8080", "HTTP server address")
+	apiKey := flag.String("api-key", "", "API key for protecting API endpoints (optional, but recommended for production)")
 	flag.Parse()
 
 	// Validate flags
@@ -108,7 +109,7 @@ func main() {
 
 	// Initialize web server
 	log.Printf("Initializing web server")
-	srv, err := server.New(db, w, s, *outputDir)
+	srv, err := server.New(db, w, s, *outputDir, *apiKey)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}

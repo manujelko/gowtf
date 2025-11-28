@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/manujelko/gowtf/internal/models"
@@ -20,6 +21,7 @@ type Server struct {
 	Watcher       WatcherInterface
 	Scheduler     SchedulerInterface
 	OutputDir     string
+	APIKey        string
 	httpServer    *http.Server
 }
 
@@ -34,7 +36,7 @@ type SchedulerInterface interface {
 	HandleEnabledStateChange(ctx context.Context, workflowID int) error
 }
 
-func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string) (*Server, error) {
+func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string, apiKey string) (*Server, error) {
 	workflows, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, err
@@ -70,6 +72,7 @@ func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, out
 		Watcher:       watcher,
 		Scheduler:     scheduler,
 		OutputDir:     outputDir,
+		APIKey:        apiKey,
 	}, nil
 }
 
@@ -85,7 +88,38 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/workflow/{id}/toggle", s.handleToggleWorkflow)
 	mux.HandleFunc("GET /api/task-instance/{id}/logs", s.handleTaskLogs)
 
-	return s.logRequest(mux)
+	// Apply API key middleware if API key is set
+	handler := s.logRequest(mux)
+	if s.APIKey != "" {
+		handler = s.apiKeyMiddleware(handler)
+	}
+
+	return handler
+}
+
+func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only protect API endpoints
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Check for API key in header or query parameter
+		apiKey := r.Header.Get("X-API-Key")
+		if apiKey == "" {
+			apiKey = r.URL.Query().Get("api_key")
+		}
+
+		// Validate API key
+		if apiKey == "" || apiKey != s.APIKey {
+			log.Printf("API authentication failed for %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) logRequest(next http.Handler) http.Handler {
