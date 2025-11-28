@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"math"
@@ -23,6 +24,80 @@ type WorkflowWithStatus struct {
 	RecentRuns []*models.WorkflowRun // Up to 5 most recent runs
 	NextRunAt  *time.Time
 	ErrorMsg   string // Error message if workflow file failed to parse
+}
+
+// validateIDParam validates that an ID string is a positive integer
+// Returns the parsed integer and an error if validation fails
+func validateIDParam(idStr string) (int, error) {
+	if idStr == "" {
+		return 0, errors.New("ID parameter is required")
+	}
+
+	// Check for invalid characters (only digits allowed)
+	for _, r := range idStr {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("ID parameter contains invalid characters: %q", idStr)
+		}
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return 0, fmt.Errorf("ID parameter is not a valid integer: %w", err)
+	}
+
+	// Must be positive
+	if id <= 0 {
+		return 0, fmt.Errorf("ID parameter must be a positive integer, got: %d", id)
+	}
+
+	return id, nil
+}
+
+// validateAndSanitizePath validates and sanitizes a file path to prevent path traversal attacks
+// It ensures the path is within the baseDir and doesn't contain .. or escape the base directory
+// Accepts both absolute and relative paths, but ensures they're within baseDir
+// Returns the cleaned absolute path and an error if validation fails
+func validateAndSanitizePath(path string, baseDir string) (string, error) {
+	if path == "" {
+		return "", errors.New("path cannot be empty")
+	}
+
+	// Check for path traversal attempts
+	if strings.Contains(path, "..") {
+		return "", errors.New("path cannot contain '..' (path traversal not allowed)")
+	}
+
+	// Get absolute baseDir for comparison
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve base directory: %w", err)
+	}
+
+	var absPath string
+	if filepath.IsAbs(path) {
+		// Path is already absolute - clean it and verify it's within baseDir
+		absPath = filepath.Clean(path)
+	} else {
+		// Path is relative - join with baseDir and get absolute path
+		cleanedPath := filepath.Clean(path)
+		absPath, err = filepath.Abs(filepath.Join(baseDir, cleanedPath))
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve path: %w", err)
+		}
+	}
+
+	// Ensure the resolved path is within baseDir
+	relPath, err := filepath.Rel(absBaseDir, absPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to check path relationship: %w", err)
+	}
+
+	// If relative path starts with .., it's outside the base directory
+	if strings.HasPrefix(relPath, "..") {
+		return "", errors.New("path is outside the allowed output directory")
+	}
+
+	return absPath, nil
 }
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, tmpl string, data any) {
@@ -181,9 +256,9 @@ func (s *Server) handleWorkflowDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workflowID, err := strconv.Atoi(workflowIDStr)
+	workflowID, err := validateIDParam(workflowIDStr)
 	if err != nil {
-		http.Error(w, "Invalid workflow ID", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid workflow ID: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -344,9 +419,9 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runID, err := strconv.Atoi(runIDStr)
+	runID, err := validateIDParam(runIDStr)
 	if err != nil {
-		http.Error(w, "Invalid run ID", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid run ID: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -643,9 +718,9 @@ func (s *Server) handleToggleWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	idStr := strings.TrimPrefix(path, "/api/workflow/")
 	idStr = strings.TrimSuffix(idStr, "/toggle")
-	id, err := strconv.Atoi(idStr)
+	id, err := validateIDParam(idStr)
 	if err != nil {
-		http.Error(w, "Invalid workflow ID", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid workflow ID: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -695,9 +770,9 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 
 	idStr := strings.TrimPrefix(path, "/api/task-instance/")
 	idStr = strings.TrimSuffix(idStr, "/logs")
-	instanceID, err := strconv.Atoi(idStr)
+	instanceID, err := validateIDParam(idStr)
 	if err != nil {
-		http.Error(w, "Invalid task instance ID", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid task instance ID: %s", err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -751,12 +826,22 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 	// Determine log file paths
 	var stdoutPath, stderrPath string
 
-	// If paths are in database, use them
+	// If paths are in database, use them (but validate them)
 	if taskInstance.StdoutPath != nil && *taskInstance.StdoutPath != "" {
-		stdoutPath = *taskInstance.StdoutPath
+		validatedPath, err := validateAndSanitizePath(*taskInstance.StdoutPath, s.OutputDir)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid stdout path: %s", err.Error()), http.StatusBadRequest)
+			return
+		}
+		stdoutPath = validatedPath
 	}
 	if taskInstance.StderrPath != nil && *taskInstance.StderrPath != "" {
-		stderrPath = *taskInstance.StderrPath
+		validatedPath, err := validateAndSanitizePath(*taskInstance.StderrPath, s.OutputDir)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid stderr path: %s", err.Error()), http.StatusBadRequest)
+			return
+		}
+		stderrPath = validatedPath
 	}
 
 	// If paths not in database yet (task still running), construct them
@@ -775,13 +860,26 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 							// Construct path: outputDir/workflow-name/YYYY-MM-DD/HH-MM-SS/task-name/stdout.log
 							dateDir := workflowRun.StartedAt.Format("2006-01-02")
 							timeDir := workflowRun.StartedAt.Format("15-04-05")
-							taskDir := filepath.Join(s.OutputDir, workflow.Name, dateDir, timeDir, task.Name)
+							// Build relative path components (no path traversal possible here as we control all values)
+							relativePath := filepath.Join(workflow.Name, dateDir, timeDir, task.Name)
 
 							if stdoutPath == "" {
-								stdoutPath = filepath.Join(taskDir, "stdout.log")
+								// Validate the constructed path
+								validatedPath, err := validateAndSanitizePath(filepath.Join(relativePath, "stdout.log"), s.OutputDir)
+								if err != nil {
+									http.Error(w, fmt.Sprintf("Invalid stdout path: %s", err.Error()), http.StatusBadRequest)
+									return
+								}
+								stdoutPath = validatedPath
 							}
 							if stderrPath == "" {
-								stderrPath = filepath.Join(taskDir, "stderr.log")
+								// Validate the constructed path
+								validatedPath, err := validateAndSanitizePath(filepath.Join(relativePath, "stderr.log"), s.OutputDir)
+								if err != nil {
+									http.Error(w, fmt.Sprintf("Invalid stderr path: %s", err.Error()), http.StatusBadRequest)
+									return
+								}
+								stderrPath = validatedPath
 							}
 							break
 						}
