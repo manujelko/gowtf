@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ func TestScheduler_NewScheduler(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -43,7 +44,7 @@ func TestScheduler_Start_LoadsEnabledWorkflows(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -113,7 +114,7 @@ func TestScheduler_OnScheduleFire_CreatesRunAndTasks(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestScheduler_HandleWorkflowEvent_Add(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -267,7 +268,7 @@ func TestScheduler_HandleWorkflowEvent_Add_Disabled(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -321,7 +322,7 @@ func TestScheduler_HandleWorkflowEvent_Update(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -389,7 +390,7 @@ func TestScheduler_HandleWorkflowEvent_Delete(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -458,7 +459,7 @@ func TestScheduler_UnscheduleWorkflow(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -518,7 +519,7 @@ func TestScheduler_ScheduleWorkflow_InvalidSchedule(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
@@ -552,7 +553,7 @@ func TestScheduler_Stop(t *testing.T) {
 	watcherEvents := make(chan watcher.WorkflowEvent, 10)
 	notifyCh := make(chan WorkflowRunEvent, 10)
 
-	s, err := NewScheduler(db, watcherEvents, notifyCh)
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
 	if err != nil {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}

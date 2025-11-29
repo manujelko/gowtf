@@ -2,6 +2,7 @@ package watcher
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,7 +38,7 @@ func setupTestWatcher(t *testing.T) (*Watcher, string, func()) {
 	notifyCh := make(chan WorkflowEvent, 10)
 
 	// Create watcher
-	watcher, err := NewWatcher(db, tmpDir, notifyCh)
+	watcher, err := NewWatcher(db, tmpDir, notifyCh, slog.Default())
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		os.Remove(dbPath)

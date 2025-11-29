@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,7 +16,7 @@ func setupTestServer(t *testing.T) *Server {
 	t.Helper()
 
 	db := models.NewTestDB(t)
-	srv, err := New(db, nil, nil, "./output", "")
+	srv, err := New(db, nil, nil, "./output", "", slog.Default())
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}

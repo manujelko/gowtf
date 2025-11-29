@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +27,7 @@ type Executor struct {
 	events        <-chan scheduler.WorkflowRunEvent
 	workerPool    *worker.WorkerPool
 	healthMonitor *health.HealthMonitor
+	logger        *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -34,7 +35,7 @@ type Executor struct {
 }
 
 // NewExecutor creates a new executor instance
-func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize int, outputDir string) (*Executor, error) {
+func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize int, outputDir string, logger *slog.Logger) (*Executor, error) {
 	workflowStore, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow store: %w", err)
@@ -67,7 +68,7 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize 
 
 	// Create health monitor
 	healthConfig := health.DefaultConfig()
-	healthMonitor := health.NewHealthMonitor(taskInstanceStore, healthConfig)
+	healthMonitor := health.NewHealthMonitor(taskInstanceStore, healthConfig, logger)
 
 	// Set up heartbeat channel for worker pool
 	workerPool.SetHeartbeatChannel(healthMonitor.HeartbeatChannel(), healthConfig.HeartbeatInterval)
@@ -84,6 +85,7 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize 
 		events:            events,
 		workerPool:        workerPool,
 		healthMonitor:     healthMonitor,
+		logger:            logger,
 		ctx:               ctx,
 		cancel:            cancel,
 	}, nil
@@ -91,7 +93,7 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize 
 
 // Start starts the executor event loop
 func (e *Executor) Start(ctx context.Context) error {
-	log.Printf("Executor: Started")
+	e.logger.Info("Executor started")
 
 	// Start health monitor
 	e.healthMonitor.Start(ctx)
@@ -118,7 +120,10 @@ func (e *Executor) Start(ctx context.Context) error {
 					return
 				}
 				if err := e.handleWorkflowRun(ctx, event); err != nil {
-					log.Printf("Executor: Failed to handle workflow run %d: %v", event.WorkflowRunID, err)
+					e.logger.Error("Failed to handle workflow run",
+						"workflow_run_id", event.WorkflowRunID,
+						"workflow_id", event.WorkflowID,
+						"error", err)
 				}
 			case <-ctx.Done():
 				return
@@ -139,7 +144,7 @@ func (e *Executor) Stop() {
 	e.healthMonitor.Stop()
 	e.workerPool.Stop()
 	e.wg.Wait()
-	log.Printf("Executor: Stopped")
+	e.logger.Info("Executor stopped")
 }
 
 // handleWorkflowRun processes a workflow run event
@@ -153,14 +158,21 @@ func (e *Executor) handleWorkflowRun(ctx context.Context, event scheduler.Workfl
 		workflowName = workflow.Name
 	}
 
-	log.Printf("Executor: Processing workflow run %d for workflow %q (ID: %d)", event.WorkflowRunID, workflowName, event.WorkflowID)
+	e.logger.Info("Processing workflow run",
+		"workflow_run_id", event.WorkflowRunID,
+		"workflow_id", event.WorkflowID,
+		"workflow_name", workflowName)
 
 	// Process in a goroutine to allow concurrent workflow runs
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
 		if err := e.processWorkflowRun(ctx, event.WorkflowRunID, event.WorkflowID); err != nil {
-			log.Printf("Executor: Error processing workflow run %d for workflow %q: %v", event.WorkflowRunID, workflowName, err)
+			e.logger.Error("Error processing workflow run",
+				"workflow_run_id", event.WorkflowRunID,
+				"workflow_id", event.WorkflowID,
+				"workflow_name", workflowName,
+				"error", err)
 		}
 	}()
 
@@ -337,7 +349,11 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 					return fmt.Errorf("failed to update workflow run status: %w", err)
 				}
 
-				log.Printf("Executor: Workflow run %d for workflow %q (ID: %d) completed with status %s", workflowRunID, workflow.Name, workflowID, status.String())
+				e.logger.Info("Workflow run completed",
+					"workflow_run_id", workflowRunID,
+					"workflow_id", workflowID,
+					"workflow_name", workflow.Name,
+					"status", status.String())
 				return nil
 			}
 
@@ -362,17 +378,30 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 				}
 			}
 			if task == nil {
-				log.Printf("Executor: Task %d not found, skipping", ti.TaskID)
+				e.logger.Warn("Task not found, skipping",
+					"task_id", ti.TaskID,
+					"workflow_run_id", workflowRunID,
+					"workflow_id", workflowID,
+					"workflow_name", workflow.Name)
 				continue
 			}
 
 			// Evaluate condition
 			shouldRun, err := e.evaluateCondition(ctx, task.Condition, task, taskInstances, tasksByName, workflowID)
 			if err != nil {
-				log.Printf("Executor: Failed to evaluate condition for task %d: %v", ti.TaskID, err)
+				e.logger.Error("Failed to evaluate condition for task",
+					"task_id", ti.TaskID,
+					"task_instance_id", ti.ID,
+					"workflow_run_id", workflowRunID,
+					"workflow_id", workflowID,
+					"workflow_name", workflow.Name,
+					"error", err)
 				// Mark as failed due to condition evaluation error
 				if err := e.markTaskFailed(ctx, ti, 1); err != nil {
-					log.Printf("Executor: Failed to mark task %d as failed: %v", ti.TaskID, err)
+					e.logger.Error("Failed to mark task as failed",
+						"task_id", ti.TaskID,
+						"task_instance_id", ti.ID,
+						"error", err)
 				}
 				continue
 			}
@@ -380,26 +409,49 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 			if !shouldRun {
 				// Condition not met, skip task
 				if err := e.markTaskSkipped(ctx, ti); err != nil {
-					log.Printf("Executor: Failed to mark task %d as skipped: %v", ti.TaskID, err)
+					e.logger.Error("Failed to mark task as skipped",
+						"task_id", ti.TaskID,
+						"task_instance_id", ti.ID,
+						"workflow_run_id", workflowRunID,
+						"workflow_name", workflow.Name,
+						"error", err)
 				} else {
-					log.Printf("Executor: Task %q (ID: %d) in workflow %q skipped due to condition", task.Name, ti.TaskID, workflow.Name)
+					e.logger.Info("Task skipped due to condition",
+						"task_id", ti.TaskID,
+						"task_instance_id", ti.ID,
+						"task_name", task.Name,
+						"workflow_run_id", workflowRunID,
+						"workflow_id", workflowID,
+						"workflow_name", workflow.Name)
 				}
 				continue
 			}
 
 			// Mark as queued
 			if err := e.markTaskQueued(ctx, ti); err != nil {
-				log.Printf("Executor: Failed to mark task %d as queued: %v", ti.TaskID, err)
+				e.logger.Error("Failed to mark task as queued",
+					"task_id", ti.TaskID,
+					"task_instance_id", ti.ID,
+					"error", err)
 				continue
 			}
 
 			// Mark as running
 			if err := e.markTaskRunning(ctx, ti); err != nil {
-				log.Printf("Executor: Failed to mark task %d as running: %v", ti.TaskID, err)
+				e.logger.Error("Failed to mark task as running",
+					"task_id", ti.TaskID,
+					"task_instance_id", ti.ID,
+					"error", err)
 				continue
 			}
 
-			log.Printf("Executor: Task %q (ID: %d) in workflow %q marked as running, submitting to worker pool", task.Name, ti.TaskID, workflow.Name)
+			e.logger.Info("Task marked as running, submitting to worker pool",
+				"task_id", ti.TaskID,
+				"task_instance_id", ti.ID,
+				"task_name", task.Name,
+				"workflow_run_id", workflowRunID,
+				"workflow_id", workflowID,
+				"workflow_name", workflow.Name)
 
 			// Create per-task cancellation context for health monitor
 			taskCtx, taskCancel := context.WithCancel(ctx)
@@ -422,10 +474,18 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 				e.healthMonitor.UnregisterTask(ti.ID)
 				taskCancel() // Cancel the context we created
 
-				log.Printf("Executor: Failed to submit task %d to worker pool: %v", ti.TaskID, err)
+				e.logger.Error("Failed to submit task to worker pool",
+					"task_id", ti.TaskID,
+					"task_instance_id", ti.ID,
+					"workflow_run_id", workflowRunID,
+					"workflow_name", workflow.Name,
+					"error", err)
 				// Mark as failed if submission fails
 				if err := e.markTaskFailed(ctx, ti, 1); err != nil {
-					log.Printf("Executor: Failed to mark task %d as failed: %v", ti.TaskID, err)
+					e.logger.Error("Failed to mark task as failed",
+						"task_id", ti.TaskID,
+						"task_instance_id", ti.ID,
+						"error", err)
 				}
 				continue
 			}
@@ -682,7 +742,10 @@ func (e *Executor) handleResults(ctx context.Context) {
 				return
 			}
 			if err := e.processTaskResult(ctx, result); err != nil {
-				log.Printf("Executor: Failed to process task result for task instance %d: %v", result.TaskInstanceID, err)
+				e.logger.Error("Failed to process task result",
+					"task_instance_id", result.TaskInstanceID,
+					"workflow_run_id", result.WorkflowRunID,
+					"error", err)
 			}
 		case <-ctx.Done():
 			return
@@ -726,7 +789,11 @@ func (e *Executor) processTaskResult(ctx context.Context, result worker.TaskResu
 
 	// Mark as success or failed based on exit code
 	if result.Error != nil {
-		log.Printf("Executor: Task instance %d execution error: %v", result.TaskInstanceID, result.Error)
+		e.logger.Error("Task instance execution error",
+			"task_instance_id", result.TaskInstanceID,
+			"workflow_run_id", result.WorkflowRunID,
+			"exit_code", result.ExitCode,
+			"error", result.Error)
 		return e.markTaskFailed(ctx, taskInstance, result.ExitCode)
 	}
 

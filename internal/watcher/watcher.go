@@ -6,7 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +48,7 @@ type Watcher struct {
 	notifyCh       chan<- WorkflowEvent
 	fsWatcher      *fsnotify.Watcher
 	fsWatcherMu    sync.Mutex // protects fsWatcher
+	logger         *slog.Logger
 	ctx            context.Context
 	cancel         context.CancelFunc
 	knownFiles     map[string]string // filepath -> hash
@@ -60,7 +61,7 @@ type Watcher struct {
 }
 
 // NewWatcher creates a new watcher instance
-func NewWatcher(db *sql.DB, watchDir string, notifyCh chan<- WorkflowEvent) (*Watcher, error) {
+func NewWatcher(db *sql.DB, watchDir string, notifyCh chan<- WorkflowEvent, logger *slog.Logger) (*Watcher, error) {
 	workflowStore, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow store: %w", err)
@@ -85,6 +86,7 @@ func NewWatcher(db *sql.DB, watchDir string, notifyCh chan<- WorkflowEvent) (*Wa
 		taskStore:      taskStore,
 		depStore:       depStore,
 		notifyCh:       notifyCh,
+		logger:         logger,
 		ctx:            ctx,
 		cancel:         cancel,
 		knownFiles:     make(map[string]string),
@@ -146,7 +148,9 @@ func (w *Watcher) syncWorkflow(filePath string) error {
 	wf, err := workflow.Load(filePath)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to load workflow: %v", err)
-		log.Printf("Failed to load workflow from %s: %v", filePath, err)
+		w.logger.Error("Failed to load workflow",
+			"file_path", filePath,
+			"error", err)
 		// Store error for UI display
 		w.mu.Lock()
 		w.fileErrors[filePath] = errMsg
@@ -346,7 +350,9 @@ func (w *Watcher) scanDirectory() error {
 
 		filePath := filepath.Join(w.watchDir, name)
 		if err := w.syncWorkflow(filePath); err != nil {
-			log.Printf("Failed to sync workflow %s: %v", filePath, err)
+			w.logger.Error("Failed to sync workflow",
+				"file_path", filePath,
+				"error", err)
 			// Continue processing other files
 		}
 	}
@@ -373,20 +379,26 @@ func (w *Watcher) processPendingFiles() {
 			w.mu.RUnlock()
 			if exists {
 				if err := w.deleteWorkflow(workflowName); err != nil {
-					log.Printf("Failed to delete workflow %s: %v", workflowName, err)
+					w.logger.Error("Failed to delete workflow",
+						"workflow_name", workflowName,
+						"file_path", file,
+						"error", err)
 				}
 			} else {
 				// File was deleted but we don't have it in our mapping
 				// This can happen if the file was deleted before we could sync it
 				// Just log and continue - we can't determine the workflow name
-				log.Printf("File %s was deleted but workflow name is unknown (file was never synced)", file)
+				w.logger.Warn("File deleted but workflow name is unknown",
+					"file_path", file)
 			}
 			continue
 		}
 
 		// File exists, load it and sync (this will get the workflow name from YAML)
 		if err := w.syncWorkflow(file); err != nil {
-			log.Printf("Failed to sync workflow %s: %v", file, err)
+			w.logger.Error("Failed to sync workflow",
+				"file_path", file,
+				"error", err)
 		}
 	}
 }
@@ -461,12 +473,16 @@ func (w *Watcher) Run() error {
 					w.mu.RUnlock()
 					if exists {
 						if err := w.deleteWorkflow(workflowName); err != nil {
-							log.Printf("Failed to delete workflow %s: %v", workflowName, err)
+							w.logger.Error("Failed to delete workflow",
+								"workflow_name", workflowName,
+								"file_path", event.Name,
+								"error", err)
 						}
 					} else {
 						// File was deleted but we don't have it in our mapping
 						// This can happen if the file was deleted before we could sync it
-						log.Printf("File %s was deleted but workflow name is unknown (file was never synced)", event.Name)
+						w.logger.Warn("File deleted but workflow name is unknown",
+							"file_path", event.Name)
 					}
 
 				case event.Op&fsnotify.Rename == fsnotify.Rename:
@@ -481,10 +497,14 @@ func (w *Watcher) Run() error {
 						w.mu.RUnlock()
 						if exists {
 							if err := w.deleteWorkflow(workflowName); err != nil {
-								log.Printf("Failed to delete workflow %s: %v", workflowName, err)
+								w.logger.Error("Failed to delete workflow",
+									"workflow_name", workflowName,
+									"file_path", event.Name,
+									"error", err)
 							}
 						} else {
-							log.Printf("File %s was renamed/deleted but workflow name is unknown (file was never synced)", event.Name)
+							w.logger.Warn("File renamed/deleted but workflow name is unknown",
+								"file_path", event.Name)
 						}
 					} else {
 						// File exists - it was created/renamed into place, treat as Create/Write
@@ -499,7 +519,7 @@ func (w *Watcher) Run() error {
 				if !ok {
 					return
 				}
-				log.Printf("File watcher error: %v", err)
+				w.logger.Error("File watcher error", "error", err)
 
 			case <-w.ctx.Done():
 				return

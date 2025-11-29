@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ func TestHealthMonitor_RegisterUnregisterTask(t *testing.T) {
 	}
 
 	config := DefaultConfig()
-	hm := NewHealthMonitor(taskInstanceStore, config)
+	hm := NewHealthMonitor(taskInstanceStore, config, slog.Default())
 
 	taskInstanceID := 123
 	cancelCalled := false
@@ -61,7 +62,7 @@ func TestHealthMonitor_HandleHeartbeat(t *testing.T) {
 	}
 
 	config := DefaultConfig()
-	hm := NewHealthMonitor(taskInstanceStore, config)
+	hm := NewHealthMonitor(taskInstanceStore, config, slog.Default())
 
 	taskInstanceID := 123
 	cancelFunc := func() {}
@@ -120,7 +121,7 @@ func TestHealthMonitor_StaleHeartbeatDetection(t *testing.T) {
 		TimeoutThreshold:  300 * time.Millisecond, // 3x heartbeat interval
 		CheckInterval:     100 * time.Millisecond,
 	}
-	hm := NewHealthMonitor(taskInstanceStore, config)
+	hm := NewHealthMonitor(taskInstanceStore, config, slog.Default())
 
 	taskInstanceID := taskInstance.ID
 	cancelCalled := make(chan struct{}, 1)
@@ -218,7 +219,7 @@ func TestHealthMonitor_StaleHeartbeatNonRunningTask(t *testing.T) {
 		TimeoutThreshold:  300 * time.Millisecond,
 		CheckInterval:     100 * time.Millisecond,
 	}
-	hm := NewHealthMonitor(taskInstanceStore, config)
+	hm := NewHealthMonitor(taskInstanceStore, config, slog.Default())
 
 	taskInstanceID := taskInstance.ID
 	cancelCalled := make(chan struct{}, 1)
@@ -276,7 +277,7 @@ func TestHealthMonitor_MonitorLoop(t *testing.T) {
 		TimeoutThreshold:  150 * time.Millisecond,
 		CheckInterval:     50 * time.Millisecond,
 	}
-	hm := NewHealthMonitor(taskInstanceStore, config)
+	hm := NewHealthMonitor(taskInstanceStore, config, slog.Default())
 
 	taskInstanceID := 123
 	cancelCalled := make(chan struct{}, 1)
@@ -323,7 +324,7 @@ func TestHealthMonitor_GracefulShutdown(t *testing.T) {
 	}
 
 	config := DefaultConfig()
-	hm := NewHealthMonitor(taskInstanceStore, config)
+	hm := NewHealthMonitor(taskInstanceStore, config, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -357,7 +358,7 @@ func TestHealthMonitor_MultipleTasks(t *testing.T) {
 		TimeoutThreshold:  150 * time.Millisecond,
 		CheckInterval:     50 * time.Millisecond,
 	}
-	hm := NewHealthMonitor(taskInstanceStore, config)
+	hm := NewHealthMonitor(taskInstanceStore, config, slog.Default())
 
 	// Register multiple tasks
 	cancelCalls := make(map[int]chan struct{})

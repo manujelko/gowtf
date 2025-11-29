@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"flag"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,16 +31,23 @@ func main() {
 	apiKey := flag.String("api-key", "", "API key for protecting API endpoints (optional, but recommended for production)")
 	flag.Parse()
 
+	// Initialize logger with human-readable text handler
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
 	// Validate flags
 	if *workers <= 0 {
-		log.Fatalf("workers must be greater than 0, got %d", *workers)
+		logger.Error("Invalid workers count", "workers", *workers)
+		os.Exit(1)
 	}
 
 	// Initialize database
-	log.Printf("Initializing database at %s", *dbPath)
+	logger.Info("Initializing database", "path", *dbPath)
 	db, err := sql.Open("sqlite", *dbPath+"?_timeout=5000&_journal_mode=WAL")
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		logger.Error("Failed to open database", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -53,29 +60,35 @@ func main() {
 	// Set WAL mode and busy timeout for better concurrent access
 	// WAL mode allows concurrent reads and a single writer, which is perfect for our use case
 	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
-		log.Fatalf("Failed to set busy timeout: %v", err)
+		logger.Error("Failed to set busy timeout", "error", err)
+		os.Exit(1)
 	}
 	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
-		log.Fatalf("Failed to set WAL mode: %v", err)
+		logger.Error("Failed to set WAL mode", "error", err)
+		os.Exit(1)
 	}
 	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
-		log.Fatalf("Failed to set synchronous mode: %v", err)
+		logger.Error("Failed to set synchronous mode", "error", err)
+		os.Exit(1)
 	}
 
 	// Apply migrations
 	if _, err := db.Exec(migrations.InitialMigration); err != nil {
-		log.Fatalf("Failed to apply migrations: %v", err)
+		logger.Error("Failed to apply migrations", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("Database initialized successfully")
+	logger.Info("Database initialized successfully")
 
 	// Ensure output directory exists
 	if err := os.MkdirAll(*outputDir, 0755); err != nil {
-		log.Fatalf("Failed to create output directory: %v", err)
+		logger.Error("Failed to create output directory", "path", *outputDir, "error", err)
+		os.Exit(1)
 	}
 
 	// Ensure watch directory exists
 	if err := os.MkdirAll(*watchDir, 0755); err != nil {
-		log.Fatalf("Failed to create watch directory: %v", err)
+		logger.Error("Failed to create watch directory", "path", *watchDir, "error", err)
+		os.Exit(1)
 	}
 
 	// Create communication channels
@@ -87,41 +100,45 @@ func main() {
 	defer cancel()
 
 	// Initialize watcher
-	log.Printf("Initializing watcher for directory: %s", *watchDir)
-	w, err := watcher.NewWatcher(db, *watchDir, watcherEvents)
+	logger.Info("Initializing watcher", "directory", *watchDir)
+	w, err := watcher.NewWatcher(db, *watchDir, watcherEvents, logger)
 	if err != nil {
-		log.Fatalf("Failed to create watcher: %v", err)
+		logger.Error("Failed to create watcher", "error", err)
+		os.Exit(1)
 	}
 
 	// Initialize scheduler
-	log.Printf("Initializing scheduler")
-	s, err := scheduler.NewScheduler(db, watcherEvents, schedulerEvents)
+	logger.Info("Initializing scheduler")
+	s, err := scheduler.NewScheduler(db, watcherEvents, schedulerEvents, logger)
 	if err != nil {
-		log.Fatalf("Failed to create scheduler: %v", err)
+		logger.Error("Failed to create scheduler", "error", err)
+		os.Exit(1)
 	}
 
 	// Initialize executor
-	log.Printf("Initializing executor with %d workers", *workers)
-	e, err := executor.NewExecutor(db, schedulerEvents, *workers, *outputDir)
+	logger.Info("Initializing executor", "workers", *workers)
+	e, err := executor.NewExecutor(db, schedulerEvents, *workers, *outputDir, logger)
 	if err != nil {
-		log.Fatalf("Failed to create executor: %v", err)
+		logger.Error("Failed to create executor", "error", err)
+		os.Exit(1)
 	}
 
 	// Initialize web server
-	log.Printf("Initializing web server")
-	srv, err := server.New(db, w, s, *outputDir, *apiKey)
+	logger.Info("Initializing web server")
+	srv, err := server.New(db, w, s, *outputDir, *apiKey, logger)
 	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		logger.Error("Failed to create server", "error", err)
+		os.Exit(1)
 	}
 
 	// Start watcher (runs in background)
-	log.Printf("Starting watcher")
+	logger.Info("Starting watcher")
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if err := w.Run(); err != nil {
-			log.Printf("Watcher error: %v", err)
+			logger.Error("Watcher error", "error", err)
 		}
 	}()
 
@@ -130,7 +147,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := s.Start(ctx); err != nil {
-			log.Printf("Scheduler error: %v", err)
+			logger.Error("Scheduler error", "error", err)
 		}
 	}()
 
@@ -139,7 +156,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := e.Start(ctx); err != nil {
-			log.Printf("Executor error: %v", err)
+			logger.Error("Executor error", "error", err)
 		}
 	}()
 
@@ -148,22 +165,22 @@ func main() {
 	go func() {
 		defer wg.Done()
 		if err := srv.ListenAndServe(*httpAddr); err != nil && err != http.ErrServerClosed {
-			log.Printf("Server error: %v", err)
+			logger.Error("Server error", "error", err)
 		}
 	}()
 
-	log.Printf("gowtf started successfully")
-	log.Printf("Watching directory: %s", *watchDir)
-	log.Printf("Output directory: %s", *outputDir)
-	log.Printf("Web UI available at: http://localhost%s", *httpAddr)
-	log.Printf("Press Ctrl+C to stop")
+	logger.Info("gowtf started successfully",
+		"watch_dir", *watchDir,
+		"output_dir", *outputDir,
+		"web_ui", "http://localhost"+*httpAddr)
+	logger.Info("Press Ctrl+C to stop")
 
 	// Wait for interrupt signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	<-sigChan
 
-	log.Printf("Shutting down gracefully...")
+	logger.Info("Shutting down gracefully...")
 
 	// Cancel context to stop scheduler and executor
 	cancel()
@@ -177,11 +194,11 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
+		logger.Error("Server shutdown error", "error", err)
 	}
 
 	// Wait for goroutines to finish
 	wg.Wait()
 
-	log.Printf("Shutdown complete")
+	logger.Info("Shutdown complete")
 }

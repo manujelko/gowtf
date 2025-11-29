@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -22,6 +22,7 @@ type Server struct {
 	Scheduler     SchedulerInterface
 	OutputDir     string
 	APIKey        string
+	logger        *slog.Logger
 	httpServer    *http.Server
 }
 
@@ -36,7 +37,7 @@ type SchedulerInterface interface {
 	HandleEnabledStateChange(ctx context.Context, workflowID int) error
 }
 
-func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string, apiKey string) (*Server, error) {
+func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string, apiKey string, logger *slog.Logger) (*Server, error) {
 	workflows, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, err
@@ -73,6 +74,7 @@ func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, out
 		Scheduler:     scheduler,
 		OutputDir:     outputDir,
 		APIKey:        apiKey,
+		logger:        logger,
 	}, nil
 }
 
@@ -113,7 +115,10 @@ func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
 
 		// Validate API key
 		if apiKey == "" || apiKey != s.APIKey {
-			log.Printf("API authentication failed for %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			s.logger.Warn("API authentication failed",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -131,7 +136,11 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 
 		next.ServeHTTP(ww, r)
 
-		log.Printf("%s %s %d %v", r.Method, r.URL.Path, ww.statusCode, time.Since(start))
+		s.logger.Info("HTTP request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", ww.statusCode,
+			"duration", time.Since(start))
 	})
 }
 

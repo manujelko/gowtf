@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -90,6 +90,7 @@ type Scheduler struct {
 
 	watcherEvents <-chan watcher.WorkflowEvent
 	notifyCh      chan<- WorkflowRunEvent
+	logger        *slog.Logger
 
 	cron       *cron.Cron
 	entryMap   map[int]cron.EntryID // workflowID -> entryID
@@ -100,7 +101,7 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a new scheduler instance
-func NewScheduler(db *sql.DB, watcherEvents <-chan watcher.WorkflowEvent, notifyCh chan<- WorkflowRunEvent) (*Scheduler, error) {
+func NewScheduler(db *sql.DB, watcherEvents <-chan watcher.WorkflowEvent, notifyCh chan<- WorkflowRunEvent, logger *slog.Logger) (*Scheduler, error) {
 	workflowStore, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow store: %w", err)
@@ -131,6 +132,7 @@ func NewScheduler(db *sql.DB, watcherEvents <-chan watcher.WorkflowEvent, notify
 		taskInstanceStore: taskInstanceStore,
 		watcherEvents:     watcherEvents,
 		notifyCh:          notifyCh,
+		logger:            logger,
 		entryMap:          make(map[int]cron.EntryID),
 		ctx:               ctx,
 		cancel:            cancel,
@@ -149,19 +151,22 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to load enabled workflows: %w", err)
 	}
 
-	log.Printf("Scheduler: Loading %d enabled workflows", len(workflows))
+	s.logger.Info("Loading enabled workflows", "count", len(workflows))
 
 	// Schedule each workflow
 	for _, wf := range workflows {
 		if err := s.scheduleWorkflow(ctx, wf); err != nil {
-			log.Printf("Scheduler: Failed to schedule workflow %q (ID: %d): %v", wf.Name, wf.ID, err)
+			s.logger.Error("Failed to schedule workflow",
+				"workflow_id", wf.ID,
+				"workflow_name", wf.Name,
+				"error", err)
 			// Continue with other workflows
 		}
 	}
 
 	// Start the cron scheduler
 	s.cron.Start()
-	log.Printf("Scheduler: Started")
+	s.logger.Info("Scheduler started")
 
 	// Start goroutine to listen for watcher events
 	go s.handleWatcherEvents(ctx)
@@ -180,7 +185,11 @@ func (s *Scheduler) handleWatcherEvents(ctx context.Context) {
 				return
 			}
 			if err := s.handleWorkflowEvent(ctx, event); err != nil {
-				log.Printf("Scheduler: Failed to handle workflow event %v: %v", event, err)
+				s.logger.Error("Failed to handle workflow event",
+					"event_type", event.Type,
+					"workflow_id", event.WorkflowID,
+					"workflow_name", event.WorkflowName,
+					"error", err)
 			}
 		case <-ctx.Done():
 			return
@@ -198,7 +207,8 @@ func (s *Scheduler) handleWorkflowEvent(ctx context.Context, event watcher.Workf
 			return fmt.Errorf("failed to get workflow: %w", err)
 		}
 		if wf == nil {
-			log.Printf("Scheduler: Workflow ID %d not found for add event", event.WorkflowID)
+			s.logger.Warn("Workflow not found for add event",
+				"workflow_id", event.WorkflowID)
 			return nil
 		}
 		// Only schedule if enabled
@@ -215,7 +225,8 @@ func (s *Scheduler) handleWorkflowEvent(ctx context.Context, event watcher.Workf
 			return fmt.Errorf("failed to get workflow: %w", err)
 		}
 		if wf == nil {
-			log.Printf("Scheduler: Workflow ID %d not found for update event", event.WorkflowID)
+			s.logger.Warn("Workflow not found for update event",
+				"workflow_id", event.WorkflowID)
 			return nil
 		}
 		// Re-schedule if enabled
@@ -264,7 +275,10 @@ func (s *Scheduler) scheduleWorkflow(ctx context.Context, wf *models.Workflow) e
 	s.entryMap[workflowID] = entryID
 	s.entryMapMu.Unlock()
 
-	log.Printf("Scheduler: Scheduled workflow %q (ID: %d) with schedule %q", wf.Name, workflowID, wf.Schedule)
+	s.logger.Info("Scheduled workflow",
+		"workflow_id", workflowID,
+		"workflow_name", wf.Name,
+		"schedule", wf.Schedule)
 	return nil
 }
 
@@ -287,9 +301,12 @@ func (s *Scheduler) unscheduleWorkflow(workflowID int) {
 		ctx := context.Background()
 		wf, err := s.workflowStore.GetByID(ctx, workflowID)
 		if err == nil && wf != nil {
-			log.Printf("Scheduler: Unscheduled workflow %q (ID: %d)", wf.Name, workflowID)
+			s.logger.Info("Unscheduled workflow",
+				"workflow_id", workflowID,
+				"workflow_name", wf.Name)
 		} else {
-			log.Printf("Scheduler: Unscheduled workflow ID %d", workflowID)
+			s.logger.Info("Unscheduled workflow",
+				"workflow_id", workflowID)
 		}
 	}
 }
@@ -304,11 +321,14 @@ func (s *Scheduler) onScheduleFire(workflowID int) {
 		// Fetch workflow name for logging
 		workflow, err := s.workflowStore.GetByID(ctx, workflowID)
 		if err != nil {
-			log.Printf("Scheduler: Failed to get workflow ID %d: %v", workflowID, err)
+			s.logger.Error("Failed to get workflow",
+				"workflow_id", workflowID,
+				"error", err)
 			return
 		}
 		if workflow == nil {
-			log.Printf("Scheduler: Workflow ID %d not found", workflowID)
+			s.logger.Warn("Workflow not found",
+				"workflow_id", workflowID)
 			return
 		}
 		workflowName := workflow.Name
@@ -323,22 +343,35 @@ func (s *Scheduler) onScheduleFire(workflowID int) {
 			}
 			// If it's a lock error and we have retries left, wait and retry
 			if i < maxRetries-1 {
-				log.Printf("Scheduler: Database locked while creating workflow run for %q (ID: %d), retrying...", workflowName, workflowID)
+				s.logger.Warn("Database locked while creating workflow run, retrying",
+					"workflow_id", workflowID,
+					"workflow_name", workflowName,
+					"retry", i+1)
 				time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
 				continue
 			}
 		}
 		if err != nil {
-			log.Printf("Scheduler: Failed to create workflow run for %q (ID: %d) after %d retries: %v", workflowName, workflowID, maxRetries, err)
+			s.logger.Error("Failed to create workflow run after retries",
+				"workflow_id", workflowID,
+				"workflow_name", workflowName,
+				"retries", maxRetries,
+				"error", err)
 			return
 		}
 
-		log.Printf("Scheduler: Created workflow run %d for workflow %q (ID: %d)", workflowRun.ID, workflowName, workflowID)
+		s.logger.Info("Created workflow run",
+			"workflow_run_id", workflowRun.ID,
+			"workflow_id", workflowID,
+			"workflow_name", workflowName)
 
 		// Get all tasks for the workflow
 		tasks, err := s.taskStore.GetForWorkflow(ctx, workflowID)
 		if err != nil {
-			log.Printf("Scheduler: Failed to get tasks for workflow %q (ID: %d): %v", workflowName, workflowID, err)
+			s.logger.Error("Failed to get tasks for workflow",
+				"workflow_id", workflowID,
+				"workflow_name", workflowName,
+				"error", err)
 			return
 		}
 
@@ -363,11 +396,19 @@ func (s *Scheduler) onScheduleFire(workflowID int) {
 			return nil
 		})
 		if err != nil {
-			log.Printf("Scheduler: Failed to create task instances for workflow %q (ID: %d): %v", workflowName, workflowID, err)
+			s.logger.Error("Failed to create task instances for workflow",
+				"workflow_id", workflowID,
+				"workflow_name", workflowName,
+				"workflow_run_id", workflowRun.ID,
+				"error", err)
 			return
 		}
 
-		log.Printf("Scheduler: Created %d task instances for workflow run %d (workflow: %q)", createdCount, workflowRun.ID, workflowName)
+		s.logger.Info("Created task instances for workflow run",
+			"workflow_run_id", workflowRun.ID,
+			"workflow_id", workflowID,
+			"workflow_name", workflowName,
+			"task_count", createdCount)
 
 		// Notify executor
 		if s.notifyCh != nil {
@@ -377,7 +418,9 @@ func (s *Scheduler) onScheduleFire(workflowID int) {
 				WorkflowID:    workflowID,
 			}:
 			case <-s.ctx.Done():
-				log.Printf("Scheduler: Context cancelled while sending notification for workflow %q", workflowName)
+				s.logger.Warn("Context cancelled while sending notification",
+					"workflow_id", workflowID,
+					"workflow_name", workflowName)
 			}
 		}
 	}()
@@ -391,6 +434,6 @@ func (s *Scheduler) Stop() {
 		// Stop cron scheduler (blocks until running jobs complete)
 		ctx := s.cron.Stop()
 		<-ctx.Done()
-		log.Printf("Scheduler: Stopped")
+		s.logger.Info("Scheduler stopped")
 	}
 }

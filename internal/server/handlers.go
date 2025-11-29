@@ -153,14 +153,19 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	for _, w := range workflows {
 		run, err := s.WorkflowRuns.GetLatestForWorkflow(ctx, w.ID)
 		if err != nil {
-			// Log error? For now just ignore latest run if failed
-			fmt.Printf("Failed to get latest run for wf %d: %v\n", w.ID, err)
+			s.logger.Error("Failed to get latest run for workflow",
+				"workflow_id", w.ID,
+				"workflow_name", w.Name,
+				"error", err)
 		}
 
 		// Get last 5 runs for status circles
 		recentRuns, err := s.WorkflowRuns.GetRunsForWorkflow(ctx, w.ID, 5)
 		if err != nil {
-			fmt.Printf("Failed to get recent runs for wf %d: %v\n", w.ID, err)
+			s.logger.Error("Failed to get recent runs for workflow",
+				"workflow_id", w.ID,
+				"workflow_name", w.Name,
+				"error", err)
 			recentRuns = []*models.WorkflowRun{}
 		}
 
@@ -746,7 +751,10 @@ func (s *Server) handleToggleWorkflow(w http.ResponseWriter, r *http.Request) {
 	if s.Scheduler != nil {
 		if err := s.Scheduler.HandleEnabledStateChange(ctx, id); err != nil {
 			// Log error but don't fail the request - the database is updated
-			fmt.Printf("Failed to notify scheduler of enabled state change for workflow %d: %v\n", id, err)
+			s.logger.Error("Failed to notify scheduler of enabled state change",
+				"workflow_id", id,
+				"workflow_name", workflow.Name,
+				"error", err)
 		}
 	}
 

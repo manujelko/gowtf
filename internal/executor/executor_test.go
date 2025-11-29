@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestExecutor_HandleWorkflowRun(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestExecutor_DependencyResolution(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -220,7 +221,7 @@ func TestExecutor_ConditionEvaluation_AllUpstreamSuccess(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -343,7 +344,7 @@ func TestExecutor_ConditionEvaluation_TaskNameSuccess(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -462,7 +463,7 @@ func TestExecutor_TaskStateTransitions(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -547,7 +548,7 @@ func TestExecutor_WorkflowRunStatusUpdate(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -623,7 +624,7 @@ func TestExecutor_WorkflowStatus_HandledVsUnhandledFailures(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}
@@ -849,7 +850,7 @@ func TestExecutor_HealthMonitorIntegration(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	executor, err := NewExecutor(db, events, 5, outputDir)
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
 	if err != nil {
 		t.Fatalf("NewExecutor failed: %v", err)
 	}

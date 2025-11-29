@@ -2,7 +2,7 @@ package health
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -45,6 +45,7 @@ type HealthMonitor struct {
 	activeTasks       map[int]*activeTask
 	mu                sync.RWMutex
 	config            Config
+	logger            *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,7 +53,7 @@ type HealthMonitor struct {
 }
 
 // NewHealthMonitor creates a new health monitor instance
-func NewHealthMonitor(taskInstanceStore *models.TaskInstanceStore, config Config) *HealthMonitor {
+func NewHealthMonitor(taskInstanceStore *models.TaskInstanceStore, config Config, logger *slog.Logger) *HealthMonitor {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Buffer heartbeats to avoid blocking workers
@@ -63,6 +64,7 @@ func NewHealthMonitor(taskInstanceStore *models.TaskInstanceStore, config Config
 		heartbeatCh:       make(chan HeartbeatMessage, heartbeatBuffer),
 		activeTasks:       make(map[int]*activeTask),
 		config:            config,
+		logger:            logger,
 		ctx:               ctx,
 		cancel:            cancel,
 	}
@@ -83,7 +85,8 @@ func (hm *HealthMonitor) RegisterTask(taskInstanceID int, cancelFunc context.Can
 		lastHeartbeat:  time.Now(),
 		taskInstanceID: taskInstanceID,
 	}
-	log.Printf("HealthMonitor: Registered task instance %d for monitoring", taskInstanceID)
+	hm.logger.Info("Registered task instance for monitoring",
+		"task_instance_id", taskInstanceID)
 }
 
 // UnregisterTask unregisters a task instance from monitoring
@@ -93,7 +96,8 @@ func (hm *HealthMonitor) UnregisterTask(taskInstanceID int) {
 
 	if _, exists := hm.activeTasks[taskInstanceID]; exists {
 		delete(hm.activeTasks, taskInstanceID)
-		log.Printf("HealthMonitor: Unregistered task instance %d", taskInstanceID)
+		hm.logger.Info("Unregistered task instance",
+			"task_instance_id", taskInstanceID)
 	}
 }
 
@@ -104,7 +108,7 @@ func (hm *HealthMonitor) Start(ctx context.Context) {
 		defer hm.wg.Done()
 		hm.monitor(ctx)
 	}()
-	log.Printf("HealthMonitor: Started")
+	hm.logger.Info("HealthMonitor started")
 }
 
 // Stop stops the health monitor gracefully
@@ -112,7 +116,7 @@ func (hm *HealthMonitor) Stop() {
 	hm.cancel()
 	hm.wg.Wait()
 	close(hm.heartbeatCh)
-	log.Printf("HealthMonitor: Stopped")
+	hm.logger.Info("HealthMonitor stopped")
 }
 
 // monitor is the main monitoring loop
@@ -160,7 +164,9 @@ func (hm *HealthMonitor) checkStaleHeartbeats(ctx context.Context) {
 		timeSinceLastHeartbeat := now.Sub(task.lastHeartbeat)
 		if timeSinceLastHeartbeat > hm.config.TimeoutThreshold {
 			staleTasks = append(staleTasks, task)
-			log.Printf("HealthMonitor: Task instance %d is stale (no heartbeat for %v)", taskInstanceID, timeSinceLastHeartbeat)
+			hm.logger.Warn("Task instance is stale",
+				"task_instance_id", taskInstanceID,
+				"time_since_last_heartbeat", timeSinceLastHeartbeat)
 		}
 	}
 	hm.mu.Unlock()
@@ -180,18 +186,22 @@ func (hm *HealthMonitor) handleStaleTask(ctx context.Context, task *activeTask) 
 	hm.mu.Unlock()
 
 	// Cancel the context to kill the subprocess
-	log.Printf("HealthMonitor: Cancelling context for stale task instance %d", task.taskInstanceID)
+	hm.logger.Info("Cancelling context for stale task instance",
+		"task_instance_id", task.taskInstanceID)
 	cancelFunc()
 
 	// Mark task as failed in the database
 	taskInstance, err := hm.taskInstanceStore.GetByID(ctx, task.taskInstanceID)
 	if err != nil {
-		log.Printf("HealthMonitor: Failed to get task instance %d: %v", task.taskInstanceID, err)
+		hm.logger.Error("Failed to get task instance",
+			"task_instance_id", task.taskInstanceID,
+			"error", err)
 		return
 	}
 
 	if taskInstance == nil {
-		log.Printf("HealthMonitor: Task instance %d not found in database", task.taskInstanceID)
+		hm.logger.Warn("Task instance not found in database",
+			"task_instance_id", task.taskInstanceID)
 		return
 	}
 
@@ -204,10 +214,13 @@ func (hm *HealthMonitor) handleStaleTask(ctx context.Context, task *activeTask) 
 		taskInstance.FinishedAt = &now
 
 		if err := hm.taskInstanceStore.Update(ctx, taskInstance); err != nil {
-			log.Printf("HealthMonitor: Failed to mark task instance %d as failed: %v", task.taskInstanceID, err)
+			hm.logger.Error("Failed to mark task instance as failed",
+				"task_instance_id", task.taskInstanceID,
+				"error", err)
 			return
 		}
 
-		log.Printf("HealthMonitor: Marked task instance %d as failed due to stale heartbeat", task.taskInstanceID)
+		hm.logger.Info("Marked task instance as failed due to stale heartbeat",
+			"task_instance_id", task.taskInstanceID)
 	}
 }
