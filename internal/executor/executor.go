@@ -794,12 +794,160 @@ func (e *Executor) processTaskResult(ctx context.Context, result worker.TaskResu
 			"workflow_run_id", result.WorkflowRunID,
 			"exit_code", result.ExitCode,
 			"error", result.Error)
-		return e.markTaskFailed(ctx, taskInstance, result.ExitCode)
+		if err := e.markTaskFailed(ctx, taskInstance, result.ExitCode); err != nil {
+			return err
+		}
+		// Check for retries after marking as failed
+		return e.handleTaskRetry(ctx, taskInstance, result.WorkflowRunID)
 	}
 
 	if result.ExitCode == 0 {
 		return e.markTaskSuccess(ctx, taskInstance, result.ExitCode)
 	}
 
-	return e.markTaskFailed(ctx, taskInstance, result.ExitCode)
+	// Task failed (exit code != 0)
+	if err := e.markTaskFailed(ctx, taskInstance, result.ExitCode); err != nil {
+		return err
+	}
+	// Check for retries after marking as failed
+	return e.handleTaskRetry(ctx, taskInstance, result.WorkflowRunID)
+}
+
+// handleTaskRetry checks if a failed task should be retried and schedules a retry if applicable
+func (e *Executor) handleTaskRetry(ctx context.Context, taskInstance *models.TaskInstance, workflowRunID int) error {
+	// Get workflow run to find workflow ID
+	workflowRun, err := e.workflowRunStore.GetByID(ctx, workflowRunID)
+	if err != nil {
+		return fmt.Errorf("failed to get workflow run: %w", err)
+	}
+	if workflowRun == nil {
+		return fmt.Errorf("workflow run %d not found", workflowRunID)
+	}
+
+	// Get task configuration
+	task, err := e.taskStore.GetForWorkflow(ctx, workflowRun.WorkflowID)
+	if err != nil {
+		return fmt.Errorf("failed to get tasks: %w", err)
+	}
+
+	var taskConfig *models.WorkflowTask
+	for _, t := range task {
+		if t.ID == taskInstance.TaskID {
+			taskConfig = t
+			break
+		}
+	}
+
+	if taskConfig == nil {
+		return fmt.Errorf("task %d not found", taskInstance.TaskID)
+	}
+
+	// Check if retries are available
+	// Retry if: task.Retries > 0 AND taskInstance.Attempt <= task.Retries
+	if taskConfig.Retries <= 0 {
+		// No retries configured
+		return nil
+	}
+
+	if taskInstance.Attempt > taskConfig.Retries {
+		// Retries exhausted
+		return nil
+	}
+
+	// Parse retry delay
+	var retryDelay time.Duration
+	if taskConfig.RetryDelay != "" {
+		parsedDelay, err := time.ParseDuration(taskConfig.RetryDelay)
+		if err != nil {
+			e.logger.Warn("Failed to parse retry delay, using default",
+				"task_id", taskInstance.TaskID,
+				"task_instance_id", taskInstance.ID,
+				"workflow_run_id", workflowRunID,
+				"retry_delay", taskConfig.RetryDelay,
+				"error", err)
+			retryDelay = 30 * time.Second // Default to 30 seconds
+		} else {
+			retryDelay = parsedDelay
+		}
+	} else {
+		retryDelay = 30 * time.Second // Default to 30 seconds if not specified
+	}
+
+	// Log retry attempt
+	e.logger.Info("Scheduling task retry",
+		"task_id", taskInstance.TaskID,
+		"task_instance_id", taskInstance.ID,
+		"workflow_run_id", workflowRunID,
+		"attempt", taskInstance.Attempt,
+		"max_retries", taskConfig.Retries,
+		"retry_delay", retryDelay)
+
+	// Schedule retry in a goroutine
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+
+		// Wait for retry delay
+		select {
+		case <-time.After(retryDelay):
+			// Retry delay elapsed, create new task instance
+		case <-ctx.Done():
+			e.logger.Info("Retry cancelled due to context cancellation",
+				"task_id", taskInstance.TaskID,
+				"task_instance_id", taskInstance.ID,
+				"workflow_run_id", workflowRunID)
+			return
+		case <-e.ctx.Done():
+			e.logger.Info("Retry cancelled due to executor shutdown",
+				"task_id", taskInstance.TaskID,
+				"task_instance_id", taskInstance.ID,
+				"workflow_run_id", workflowRunID)
+			return
+		}
+
+		// Create new task instance with incremented attempt
+		newTaskInstance := &models.TaskInstance{
+			WorkflowRunID: workflowRunID,
+			TaskID:        taskInstance.TaskID,
+			State:         models.TaskStatePending,
+			Attempt:       taskInstance.Attempt + 1,
+		}
+
+		if err := e.taskInstanceStore.Insert(ctx, newTaskInstance); err != nil {
+			e.logger.Error("Failed to create retry task instance",
+				"task_id", taskInstance.TaskID,
+				"task_instance_id", taskInstance.ID,
+				"workflow_run_id", workflowRunID,
+				"attempt", newTaskInstance.Attempt,
+				"error", err)
+			return
+		}
+
+		// Ensure workflow run is in running state so the retry can be processed
+		// Check current status and update if needed
+		currentRun, err := e.workflowRunStore.GetByID(ctx, workflowRunID)
+		if err == nil && currentRun != nil {
+			if currentRun.Status == models.RunSuccess || currentRun.Status == models.RunFailed {
+				// Workflow run was already marked as complete, restart it
+				// The executor loop should pick up the retry task instance on the next iteration
+				if err := e.workflowRunStore.UpdateStatus(ctx, workflowRunID, models.RunRunning, nil); err != nil {
+					e.logger.Warn("Failed to update workflow run status to running for retry",
+						"workflow_run_id", workflowRunID,
+						"error", err)
+				} else {
+					e.logger.Info("Restarted workflow run for retry",
+						"workflow_run_id", workflowRunID)
+				}
+			}
+		}
+
+		e.logger.Info("Created retry task instance",
+			"task_id", taskInstance.TaskID,
+			"old_task_instance_id", taskInstance.ID,
+			"new_task_instance_id", newTaskInstance.ID,
+			"workflow_run_id", workflowRunID,
+			"attempt", newTaskInstance.Attempt)
+	}()
+
+	return nil
 }
