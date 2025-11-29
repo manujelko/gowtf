@@ -53,12 +53,14 @@ type WorkflowRun struct {
 var workflowRunQueries embed.FS
 
 type WorkflowRunStore struct {
-	DB              *sql.DB
-	insertQ         string
-	updateStatusQ   string
-	getByIDQ        string
-	getLatestForWfQ string
-	getRunsForWfQ   string
+	DB                 *sql.DB
+	insertQ            string
+	updateStatusQ      string
+	getByIDQ           string
+	getLatestForWfQ    string
+	getRunsForWfQ      string
+	getAllRunsForWfQ   string
+	deleteWorkflowRunQ string
 }
 
 func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
@@ -82,14 +84,24 @@ func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	getAllRunsForWfQ, err := workflowRunQueries.ReadFile("queries/workflow_runs/get_all_runs_for_workflow.sql")
+	if err != nil {
+		return nil, err
+	}
+	deleteWorkflowRunQ, err := workflowRunQueries.ReadFile("queries/workflow_runs/delete_workflow_run.sql")
+	if err != nil {
+		return nil, err
+	}
 
 	return &WorkflowRunStore{
-		DB:              db,
-		insertQ:         string(insertQ),
-		updateStatusQ:   string(updateStatusQ),
-		getByIDQ:        string(getByIDQ),
-		getLatestForWfQ: string(getLatestForWfQ),
-		getRunsForWfQ:   string(getRunsForWfQ),
+		DB:                 db,
+		insertQ:            string(insertQ),
+		updateStatusQ:      string(updateStatusQ),
+		getByIDQ:           string(getByIDQ),
+		getLatestForWfQ:    string(getLatestForWfQ),
+		getRunsForWfQ:      string(getRunsForWfQ),
+		getAllRunsForWfQ:   string(getAllRunsForWfQ),
+		deleteWorkflowRunQ: string(deleteWorkflowRunQ),
 	}, nil
 }
 
@@ -236,5 +248,80 @@ func (s *WorkflowRunStore) UpdateStatus(ctx context.Context, id int, status Work
 	return retryDBOperation(5, func() error {
 		_, err := s.DB.ExecContext(ctx, s.updateStatusQ, status.String(), finishedAny, id)
 		return err
+	})
+}
+
+// GetAllRunsForWorkflow returns all workflow runs for a workflow, ordered by started_at DESC
+func (s *WorkflowRunStore) GetAllRunsForWorkflow(ctx context.Context, workflowID int) ([]*WorkflowRun, error) {
+	rows, err := s.DB.QueryContext(ctx, s.getAllRunsForWfQ, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []*WorkflowRun
+	for rows.Next() {
+		var (
+			wr        WorkflowRun
+			statusStr string
+			finished  sql.NullTime
+		)
+
+		err := rows.Scan(
+			&wr.ID,
+			&wr.WorkflowID,
+			&statusStr,
+			&wr.StartedAt,
+			&finished,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		status, err := ParseWorkflowRunStatus(statusStr)
+		if err != nil {
+			return nil, err
+		}
+		wr.Status = status
+
+		if finished.Valid {
+			t := finished.Time
+			wr.FinishedAt = &t
+		}
+
+		runs = append(runs, &wr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return runs, nil
+}
+
+// DeleteRuns deletes workflow runs by their IDs within a transaction
+func (s *WorkflowRunStore) DeleteRuns(ctx context.Context, runIDs []int) error {
+	if len(runIDs) == 0 {
+		return nil
+	}
+
+	return retryDBOperation(5, func() error {
+		tx, err := s.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+
+		stmt, err := tx.PrepareContext(ctx, s.deleteWorkflowRunQ)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+
+		for _, id := range runIDs {
+			if _, err := stmt.ExecContext(ctx, id); err != nil {
+				return err
+			}
+		}
+
+		return tx.Commit()
 	})
 }

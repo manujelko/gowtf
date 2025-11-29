@@ -14,6 +14,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/manujelko/gowtf/internal/cleanup"
 	"github.com/manujelko/gowtf/internal/db/migrations"
 	"github.com/manujelko/gowtf/internal/executor"
 	"github.com/manujelko/gowtf/internal/scheduler"
@@ -29,6 +30,8 @@ func main() {
 	workers := flag.Int("workers", 4, "Worker pool size")
 	httpAddr := flag.String("http-addr", ":8080", "HTTP server address")
 	apiKey := flag.String("api-key", "", "API key for protecting API endpoints (optional, but recommended for production)")
+	retentionDays := flag.Int("retention-days", 30, "Number of days to retain workflow runs (0 disables cleanup)")
+	retentionKeepMin := flag.Int("retention-keep-min", 10, "Always keep at least N most recent runs per workflow")
 	flag.Parse()
 
 	// Initialize logger with human-readable text handler
@@ -39,6 +42,14 @@ func main() {
 	// Validate flags
 	if *workers <= 0 {
 		logger.Error("Invalid workers count", "workers", *workers)
+		os.Exit(1)
+	}
+	if *retentionDays < 0 {
+		logger.Error("Invalid retention-days", "retention_days", *retentionDays)
+		os.Exit(1)
+	}
+	if *retentionKeepMin < 0 {
+		logger.Error("Invalid retention-keep-min", "retention_keep_min", *retentionKeepMin)
 		os.Exit(1)
 	}
 
@@ -131,6 +142,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize cleanup component
+	var cleanupService *cleanup.Cleanup
+	if *retentionDays > 0 {
+		logger.Info("Initializing cleanup", "retention_days", *retentionDays, "keep_min", *retentionKeepMin)
+		cleanupService, err = cleanup.New(db, *retentionDays, *retentionKeepMin, logger)
+		if err != nil {
+			logger.Error("Failed to create cleanup service", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		logger.Info("Cleanup disabled (retention-days=0)")
+	}
+
 	// Start watcher (runs in background)
 	logger.Info("Starting watcher")
 	var wg sync.WaitGroup
@@ -168,6 +192,17 @@ func main() {
 			logger.Error("Server error", "error", err)
 		}
 	}()
+
+	// Start cleanup in goroutine if enabled
+	if cleanupService != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := cleanupService.Start(ctx); err != nil {
+				logger.Error("Cleanup error", "error", err)
+			}
+		}()
+	}
 
 	logger.Info("gowtf started successfully",
 		"watch_dir", *watchDir,
