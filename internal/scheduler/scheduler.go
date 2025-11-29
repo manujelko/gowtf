@@ -258,6 +258,14 @@ func (s *Scheduler) scheduleWorkflow(ctx context.Context, wf *models.Workflow) e
 		return fmt.Errorf("cron scheduler not initialized")
 	}
 
+	// Skip workflows without a schedule (manual-only workflows)
+	if wf.Schedule == "" {
+		s.logger.Info("Skipping workflow without schedule (manual-only)",
+			"workflow_id", wf.ID,
+			"workflow_name", wf.Name)
+		return nil
+	}
+
 	// Create callback that captures workflow ID
 	workflowID := wf.ID
 	callback := func() {
@@ -311,119 +319,135 @@ func (s *Scheduler) unscheduleWorkflow(workflowID int) {
 	}
 }
 
+// triggerWorkflowRun creates a workflow run and task instances, then notifies the executor
+// This is the core logic shared between scheduled and manual triggers
+func (s *Scheduler) triggerWorkflowRun(ctx context.Context, workflowID int) (*models.WorkflowRun, error) {
+	// Fetch workflow name for logging
+	workflow, err := s.workflowStore.GetByID(ctx, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workflow: %w", err)
+	}
+	if workflow == nil {
+		return nil, fmt.Errorf("workflow not found")
+	}
+	workflowName := workflow.Name
+
+	// Create workflow run with retry logic for database locks
+	var workflowRun *models.WorkflowRun
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		workflowRun, err = s.workflowRunStore.Insert(ctx, workflowID, models.RunPending)
+		if err == nil {
+			break
+		}
+		// If it's a lock error and we have retries left, wait and retry
+		if i < maxRetries-1 {
+			s.logger.Warn("Database locked while creating workflow run, retrying",
+				"workflow_id", workflowID,
+				"workflow_name", workflowName,
+				"retry", i+1)
+			time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
+			continue
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create workflow run after retries: %w", err)
+	}
+
+	s.logger.Info("Created workflow run",
+		"workflow_run_id", workflowRun.ID,
+		"workflow_id", workflowID,
+		"workflow_name", workflowName)
+
+	// Get all tasks for the workflow
+	tasks, err := s.taskStore.GetForWorkflow(ctx, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get tasks for workflow: %w", err)
+	}
+
+	// Create task instances for all tasks in a transaction to reduce contention
+	// Retry the entire transaction if we get a busy error
+	var createdCount int
+	err = retryDBOperationWithTx(ctx, s.db, 5, func(tx *sql.Tx) error {
+		createdCount = 0
+		for _, task := range tasks {
+			taskInstance := &models.TaskInstance{
+				WorkflowRunID: workflowRun.ID,
+				TaskID:        task.ID,
+				State:         models.TaskStatePending,
+				Attempt:       1,
+			}
+
+			if err := s.createTaskInstanceInTx(ctx, tx, taskInstance); err != nil {
+				return fmt.Errorf("failed to create task instance for task %q (ID: %d): %w", task.Name, task.ID, err)
+			}
+			createdCount++
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create task instances for workflow: %w", err)
+	}
+
+	s.logger.Info("Created task instances for workflow run",
+		"workflow_run_id", workflowRun.ID,
+		"workflow_id", workflowID,
+		"workflow_name", workflowName,
+		"task_count", createdCount)
+
+	// Notify executor
+	if s.notifyCh != nil {
+		select {
+		case s.notifyCh <- WorkflowRunEvent{
+			WorkflowRunID: workflowRun.ID,
+			WorkflowID:    workflowID,
+		}:
+		case <-s.ctx.Done():
+			s.logger.Warn("Context cancelled while sending notification",
+				"workflow_id", workflowID,
+				"workflow_name", workflowName)
+		case <-ctx.Done():
+			s.logger.Warn("Request context cancelled while sending notification",
+				"workflow_id", workflowID,
+				"workflow_name", workflowName)
+		}
+	}
+
+	return workflowRun, nil
+}
+
 // onScheduleFire is called when a workflow's schedule fires
 func (s *Scheduler) onScheduleFire(workflowID int) {
 	// Run in a goroutine to avoid blocking the cron scheduler
 	// This allows multiple workflows to fire concurrently
 	go func() {
 		ctx := context.Background()
-
-		// Fetch workflow name for logging
-		workflow, err := s.workflowStore.GetByID(ctx, workflowID)
+		_, err := s.triggerWorkflowRun(ctx, workflowID)
 		if err != nil {
-			s.logger.Error("Failed to get workflow",
+			s.logger.Error("Failed to trigger workflow run",
 				"workflow_id", workflowID,
 				"error", err)
-			return
-		}
-		if workflow == nil {
-			s.logger.Warn("Workflow not found",
-				"workflow_id", workflowID)
-			return
-		}
-		workflowName := workflow.Name
-
-		// Create workflow run with retry logic for database locks
-		var workflowRun *models.WorkflowRun
-		maxRetries := 3
-		for i := 0; i < maxRetries; i++ {
-			workflowRun, err = s.workflowRunStore.Insert(ctx, workflowID, models.RunPending)
-			if err == nil {
-				break
-			}
-			// If it's a lock error and we have retries left, wait and retry
-			if i < maxRetries-1 {
-				s.logger.Warn("Database locked while creating workflow run, retrying",
-					"workflow_id", workflowID,
-					"workflow_name", workflowName,
-					"retry", i+1)
-				time.Sleep(time.Duration(i+1) * 100 * time.Millisecond)
-				continue
-			}
-		}
-		if err != nil {
-			s.logger.Error("Failed to create workflow run after retries",
-				"workflow_id", workflowID,
-				"workflow_name", workflowName,
-				"retries", maxRetries,
-				"error", err)
-			return
-		}
-
-		s.logger.Info("Created workflow run",
-			"workflow_run_id", workflowRun.ID,
-			"workflow_id", workflowID,
-			"workflow_name", workflowName)
-
-		// Get all tasks for the workflow
-		tasks, err := s.taskStore.GetForWorkflow(ctx, workflowID)
-		if err != nil {
-			s.logger.Error("Failed to get tasks for workflow",
-				"workflow_id", workflowID,
-				"workflow_name", workflowName,
-				"error", err)
-			return
-		}
-
-		// Create task instances for all tasks in a transaction to reduce contention
-		// Retry the entire transaction if we get a busy error
-		var createdCount int
-		err = retryDBOperationWithTx(ctx, s.db, 5, func(tx *sql.Tx) error {
-			createdCount = 0
-			for _, task := range tasks {
-				taskInstance := &models.TaskInstance{
-					WorkflowRunID: workflowRun.ID,
-					TaskID:        task.ID,
-					State:         models.TaskStatePending,
-					Attempt:       1,
-				}
-
-				if err := s.createTaskInstanceInTx(ctx, tx, taskInstance); err != nil {
-					return fmt.Errorf("failed to create task instance for task %q (ID: %d): %w", task.Name, task.ID, err)
-				}
-				createdCount++
-			}
-			return nil
-		})
-		if err != nil {
-			s.logger.Error("Failed to create task instances for workflow",
-				"workflow_id", workflowID,
-				"workflow_name", workflowName,
-				"workflow_run_id", workflowRun.ID,
-				"error", err)
-			return
-		}
-
-		s.logger.Info("Created task instances for workflow run",
-			"workflow_run_id", workflowRun.ID,
-			"workflow_id", workflowID,
-			"workflow_name", workflowName,
-			"task_count", createdCount)
-
-		// Notify executor
-		if s.notifyCh != nil {
-			select {
-			case s.notifyCh <- WorkflowRunEvent{
-				WorkflowRunID: workflowRun.ID,
-				WorkflowID:    workflowID,
-			}:
-			case <-s.ctx.Done():
-				s.logger.Warn("Context cancelled while sending notification",
-					"workflow_id", workflowID,
-					"workflow_name", workflowName)
-			}
 		}
 	}()
+}
+
+// TriggerWorkflow manually triggers a workflow run
+// This method validates the workflow exists and is enabled, then creates a workflow run
+func (s *Scheduler) TriggerWorkflow(ctx context.Context, workflowID int) (*models.WorkflowRun, error) {
+	// Fetch workflow to validate it exists and is enabled
+	workflow, err := s.workflowStore.GetByID(ctx, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workflow: %w", err)
+	}
+	if workflow == nil {
+		return nil, fmt.Errorf("workflow not found")
+	}
+	if !workflow.Enabled {
+		return nil, fmt.Errorf("workflow is disabled")
+	}
+
+	// Trigger the workflow run
+	return s.triggerWorkflowRun(ctx, workflowID)
 }
 
 // Stop stops the scheduler gracefully

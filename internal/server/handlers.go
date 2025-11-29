@@ -177,10 +177,12 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 
 		// Calculate next run time from cron schedule
 		var nextRunAt *time.Time
-		schedule, err := parser.Parse(w.Schedule)
-		if err == nil {
-			next := schedule.Next(time.Now())
-			nextRunAt = &next
+		if w.Schedule != "" {
+			schedule, err := parser.Parse(w.Schedule)
+			if err == nil {
+				next := schedule.Next(time.Now())
+				nextRunAt = &next
+			}
 		}
 
 		// Get error message for this workflow if any
@@ -288,12 +290,16 @@ func (s *Server) handleWorkflowDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse cron schedule to calculate future runs
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
-	schedule, err := parser.Parse(workflow.Schedule)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid schedule: %v", err), http.StatusInternalServerError)
-		return
+	// Parse cron schedule to calculate future runs (if schedule exists)
+	var schedule cron.Schedule
+	if workflow.Schedule != "" {
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+		parsedSchedule, err := parser.Parse(workflow.Schedule)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid schedule: %v", err), http.StatusInternalServerError)
+			return
+		}
+		schedule = parsedSchedule
 	}
 
 	// Build grid cells from runs
@@ -310,30 +316,32 @@ func (s *Server) handleWorkflowDetail(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Calculate future runs
-	// Start from the most recent run time, or now if no runs exist
-	var startTime time.Time
-	if len(runs) > 0 {
-		// Get the newest run (first in the list since it's DESC ordered)
-		startTime = runs[0].StartedAt
-		// Get next scheduled time after the newest run
-		startTime = schedule.Next(startTime)
-	} else {
-		// No runs yet, get next scheduled time from now
-		startTime = schedule.Next(now)
-	}
+	// Calculate future runs (only if workflow has a schedule)
+	if workflow.Schedule != "" {
+		// Start from the most recent run time, or now if no runs exist
+		var startTime time.Time
+		if len(runs) > 0 {
+			// Get the newest run (first in the list since it's DESC ordered)
+			startTime = runs[0].StartedAt
+			// Get next scheduled time after the newest run
+			startTime = schedule.Next(startTime)
+		} else {
+			// No runs yet, get next scheduled time from now
+			startTime = schedule.Next(now)
+		}
 
-	// Add future runs (up to 50 future runs, but only if they're actually in the future)
-	maxFutureRuns := 50
-	nextTime := startTime
-	for i := 0; i < maxFutureRuns && nextTime.After(now); i++ {
-		cells = append(cells, GridCell{
-			Run:      nil,
-			IsFuture: true,
-			Time:     nextTime,
-			Status:   "future",
-		})
-		nextTime = schedule.Next(nextTime)
+		// Add future runs (up to 50 future runs, but only if they're actually in the future)
+		maxFutureRuns := 50
+		nextTime := startTime
+		for i := 0; i < maxFutureRuns && nextTime.After(now); i++ {
+			cells = append(cells, GridCell{
+				Run:      nil,
+				IsFuture: true,
+				Time:     nextTime,
+				Status:   "future",
+			})
+			nextTime = schedule.Next(nextTime)
+		}
 	}
 
 	// Sort cells by time (oldest first) using insertion sort
@@ -762,6 +770,69 @@ func (s *Server) handleToggleWorkflow(w http.ResponseWriter, r *http.Request) {
 	// Return success
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+func (s *Server) handleTriggerWorkflow(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract workflow ID from URL path
+	path := r.URL.Path
+	if !strings.HasPrefix(path, "/api/workflow/") {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	idStr := strings.TrimPrefix(path, "/api/workflow/")
+	idStr = strings.TrimSuffix(idStr, "/trigger")
+	id, err := validateIDParam(idStr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Invalid workflow ID: %s", err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Validate workflow exists
+	workflow, err := s.Workflows.GetByID(ctx, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if workflow == nil {
+		http.Error(w, "Workflow not found", http.StatusNotFound)
+		return
+	}
+
+	// Trigger workflow via scheduler
+	if s.Scheduler == nil {
+		http.Error(w, "Scheduler not available", http.StatusInternalServerError)
+		return
+	}
+
+	workflowRun, err := s.Scheduler.TriggerWorkflow(ctx, id)
+	if err != nil {
+		// Check for specific error types
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, "Workflow not found", http.StatusNotFound)
+			return
+		}
+		if strings.Contains(err.Error(), "disabled") {
+			http.Error(w, "Workflow is disabled", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to trigger workflow: %s", err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// Return success with workflow run ID
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]int{
+		"workflow_run_id": workflowRun.ID,
+	})
 }
 
 func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {

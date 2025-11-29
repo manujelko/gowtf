@@ -508,6 +508,17 @@ nav .btn {
     border-color: var(--status-failure);
 }
 
+.trigger-btn {
+    background: var(--status-success);
+    color: white;
+    border-color: var(--status-success);
+}
+
+.trigger-btn:hover {
+    background: var(--status-success);
+    filter: brightness(0.9);
+}
+
 .workflow-error {
     background-color: rgba(220, 53, 69, 0.1);
 }

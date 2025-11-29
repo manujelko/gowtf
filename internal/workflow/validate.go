@@ -14,10 +14,11 @@ func validateWorkflow(wf *Workflow) error {
 		errs = append(errs, "workflow.name is required")
 	}
 
-	if wf.Schedule == "" {
-		errs = append(errs, fmt.Sprintf("workflow %q: schedule is required", wf.Name))
-	} else if err := validateSchedule(wf.Schedule); err != nil {
-		errs = append(errs, fmt.Sprintf("workflow %q: invalid schedule format: %v", wf.Name, err))
+	// Schedule is optional - empty string means manual-only workflow
+	if wf.Schedule != "" {
+		if err := validateSchedule(wf.Schedule); err != nil {
+			errs = append(errs, fmt.Sprintf("workflow %q: invalid schedule format: %v", wf.Name, err))
+		}
 	}
 
 	if len(wf.Tasks) == 0 {

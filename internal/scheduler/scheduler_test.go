@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -568,4 +569,135 @@ func TestScheduler_Stop(t *testing.T) {
 
 	// Stop again should be safe
 	s.Stop()
+}
+
+func TestScheduler_TriggerWorkflow_Success(t *testing.T) {
+	db := models.NewTestDB(t)
+	watcherEvents := make(chan watcher.WorkflowEvent, 10)
+	notifyCh := make(chan WorkflowRunEvent, 10)
+
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
+	if err != nil {
+		t.Fatalf("NewScheduler failed: %v", err)
+	}
+
+	ctx := context.Background()
+	workflowStore, _ := models.NewWorkflowStore(db)
+	taskStore, _ := models.NewWorkflowTaskStore(db)
+
+	// Create enabled workflow with tasks
+	wf := &models.Workflow{
+		Name:     "test-workflow",
+		Schedule: "0 2 * * *",
+		Hash:     "hash1",
+		Enabled:  true,
+	}
+	err = workflowStore.Insert(ctx, wf)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Add tasks
+	task1 := &models.WorkflowTask{
+		WorkflowID: wf.ID,
+		Name:       "task1",
+		Script:     "echo hello",
+	}
+	err = taskStore.Insert(ctx, task1)
+	if err != nil {
+		t.Fatalf("Insert task failed: %v", err)
+	}
+
+	// Trigger workflow manually
+	workflowRun, err := s.TriggerWorkflow(ctx, wf.ID)
+	if err != nil {
+		t.Fatalf("TriggerWorkflow failed: %v", err)
+	}
+
+	if workflowRun == nil {
+		t.Fatal("expected workflow run, got nil")
+	}
+	if workflowRun.WorkflowID != wf.ID {
+		t.Errorf("expected workflow_id %d, got %d", wf.ID, workflowRun.WorkflowID)
+	}
+
+	// Verify task instances were created
+	taskInstanceStore, _ := models.NewTaskInstanceStore(db)
+	instances, err := taskInstanceStore.GetForRun(ctx, workflowRun.ID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+	if len(instances) != 1 {
+		t.Errorf("expected 1 task instance, got %d", len(instances))
+	}
+
+	// Verify notification was sent
+	select {
+	case event := <-notifyCh:
+		if event.WorkflowRunID != workflowRun.ID {
+			t.Errorf("expected workflow_run_id %d, got %d", workflowRun.ID, event.WorkflowRunID)
+		}
+		if event.WorkflowID != wf.ID {
+			t.Errorf("expected workflow_id %d, got %d", wf.ID, event.WorkflowID)
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("timeout waiting for notification")
+	}
+}
+
+func TestScheduler_TriggerWorkflow_NotFound(t *testing.T) {
+	db := models.NewTestDB(t)
+	watcherEvents := make(chan watcher.WorkflowEvent, 10)
+	notifyCh := make(chan WorkflowRunEvent, 10)
+
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
+	if err != nil {
+		t.Fatalf("NewScheduler failed: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Trigger non-existent workflow
+	_, err = s.TriggerWorkflow(ctx, 999)
+	if err == nil {
+		t.Fatal("expected error for non-existent workflow")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+func TestScheduler_TriggerWorkflow_Disabled(t *testing.T) {
+	db := models.NewTestDB(t)
+	watcherEvents := make(chan watcher.WorkflowEvent, 10)
+	notifyCh := make(chan WorkflowRunEvent, 10)
+
+	s, err := NewScheduler(db, watcherEvents, notifyCh, slog.Default())
+	if err != nil {
+		t.Fatalf("NewScheduler failed: %v", err)
+	}
+
+	ctx := context.Background()
+	workflowStore, _ := models.NewWorkflowStore(db)
+
+	// Create disabled workflow
+	wf := &models.Workflow{
+		Name:     "disabled-workflow",
+		Schedule: "0 2 * * *",
+		Hash:     "hash1",
+		Enabled:  false,
+	}
+	err = workflowStore.Insert(ctx, wf)
+	if err != nil {
+		t.Fatalf("Insert failed: %v", err)
+	}
+
+	// Trigger disabled workflow
+	_, err = s.TriggerWorkflow(ctx, wf.ID)
+	if err == nil {
+		t.Fatal("expected error for disabled workflow")
+	}
+	if !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("expected 'disabled' error, got: %v", err)
+	}
 }

@@ -35,6 +35,7 @@ type WatcherInterface interface {
 // SchedulerInterface defines the interface for notifying the scheduler
 type SchedulerInterface interface {
 	HandleEnabledStateChange(ctx context.Context, workflowID int) error
+	TriggerWorkflow(ctx context.Context, workflowID int) (*models.WorkflowRun, error)
 }
 
 func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string, apiKey string, logger *slog.Logger) (*Server, error) {
@@ -88,6 +89,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /workflow/", s.handleWorkflowDetail)
 	mux.HandleFunc("GET /run/", s.handleRunGraph)
 	mux.HandleFunc("POST /api/workflow/{id}/toggle", s.handleToggleWorkflow)
+	mux.HandleFunc("POST /api/workflow/{id}/trigger", s.handleTriggerWorkflow)
 	mux.HandleFunc("GET /api/task-instance/{id}/logs", s.handleTaskLogs)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /ready", s.handleReady)

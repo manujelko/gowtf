@@ -242,13 +242,19 @@ func TestValidation_MissingScript(t *testing.T) {
 	}
 }
 
-func TestValidation_MissingSchedule(t *testing.T) {
-	_, err := Load("testdata/invalid_no_schedule.yaml")
-	if err == nil {
-		t.Fatal("expected validation error but got nil")
+func TestValidation_EmptySchedule(t *testing.T) {
+	// Empty schedule is now allowed (manual-only workflows)
+	wf := &Workflow{
+		Name:     "test",
+		Schedule: "",
+		Tasks: []Task{
+			{Name: "task1", Script: "echo hi"},
+		},
 	}
-	if !strings.Contains(err.Error(), "schedule is required") {
-		t.Fatalf("expected missing schedule error, got: %v", err)
+
+	err := validateWorkflow(wf)
+	if err != nil {
+		t.Fatalf("expected empty schedule to be valid, got error: %v", err)
 	}
 }
 

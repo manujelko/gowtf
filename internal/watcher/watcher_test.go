@@ -285,8 +285,9 @@ func TestSyncWorkflow_ValidationError(t *testing.T) {
 	watcher, dir, cleanup := setupTestWatcher(t)
 	defer cleanup()
 
-	// Invalid YAML (missing schedule)
+	// Invalid YAML (invalid schedule format)
 	content := `name: test_workflow
+schedule: "invalid cron format"
 tasks:
   - name: task1
     script: echo hello
@@ -675,9 +676,9 @@ func TestWatcher_InvalidYAML(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Create invalid YAML file
+	// Create invalid YAML file (invalid schedule format)
 	invalidContent := `name: invalid
-# missing schedule
+schedule: "not a valid cron"
 tasks:
   - name: task1
     script: echo hello

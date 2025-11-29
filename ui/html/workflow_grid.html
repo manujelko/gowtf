@@ -1,8 +1,25 @@
 {{ define "content" }}
 <div class="workflow-header">
     <h2>{{ .Workflow.Name }}</h2>
-    <p><code>{{ .Workflow.Schedule }}</code></p>
-    <a href="/">← Back to Dashboard</a>
+    <p>
+        {{ if .Workflow.Schedule }}
+            <code>{{ .Workflow.Schedule }}</code>
+        {{ else }}
+            <span style="color: var(--status-pending); font-style: italic;">Manual only (no schedule)</span>
+        {{ end }}
+    </p>
+    <div style="display: flex; gap: 1rem; align-items: center; margin-top: 1rem;">
+        <button 
+            class="trigger-btn btn"
+            hx-post="/api/workflow/{{ .Workflow.ID }}/trigger"
+            hx-swap="none"
+            hx-trigger="click"
+            hx-on::after-request="if(event.detail.xhr.status === 200) { setTimeout(() => location.reload(), 500); } else { alert('Failed to trigger workflow: ' + event.detail.xhr.responseText); }"
+            title="Trigger workflow manually">
+            ▶ Trigger Workflow
+        </button>
+        <a href="/">← Back to Dashboard</a>
+    </div>
 </div>
 
 <div id="workflow-grid-container" hx-trigger="every 5s" hx-get="/workflow/{{ .Workflow.ID }}" hx-swap="outerHTML">
