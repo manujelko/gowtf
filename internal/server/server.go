@@ -89,6 +89,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /run/", s.handleRunGraph)
 	mux.HandleFunc("POST /api/workflow/{id}/toggle", s.handleToggleWorkflow)
 	mux.HandleFunc("GET /api/task-instance/{id}/logs", s.handleTaskLogs)
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /ready", s.handleReady)
 
 	// Apply API key middleware if API key is set
 	handler := s.logRequest(mux)

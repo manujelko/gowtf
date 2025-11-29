@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -913,4 +914,94 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// HealthResponse represents the JSON response for health endpoints
+type HealthResponse struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
+
+// handleHealth checks database connectivity
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	// Perform a simple database query to check connectivity
+	err := s.DB.PingContext(ctx)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(HealthResponse{
+			Status: "error",
+			Error:  "Database connection failed: " + err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(HealthResponse{
+		Status: "ok",
+	})
+}
+
+// handleReady checks if all components are initialized
+func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Check if all required components are initialized
+	var errors []string
+
+	if s.DB == nil {
+		errors = append(errors, "database not initialized")
+	}
+	if s.Workflows == nil {
+		errors = append(errors, "workflows store not initialized")
+	}
+	if s.WorkflowRuns == nil {
+		errors = append(errors, "workflow runs store not initialized")
+	}
+	if s.WorkflowTasks == nil {
+		errors = append(errors, "workflow tasks store not initialized")
+	}
+	if s.TaskInstances == nil {
+		errors = append(errors, "task instances store not initialized")
+	}
+	if s.Dependencies == nil {
+		errors = append(errors, "dependencies store not initialized")
+	}
+	if s.Watcher == nil {
+		errors = append(errors, "watcher not initialized")
+	}
+	if s.Scheduler == nil {
+		errors = append(errors, "scheduler not initialized")
+	}
+
+	// If there are any errors, return 503
+	if len(errors) > 0 {
+		errorMsg := "Components not ready: " + strings.Join(errors, ", ")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(HealthResponse{
+			Status: "error",
+			Error:  errorMsg,
+		})
+		return
+	}
+
+	// All components are initialized
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(HealthResponse{
+		Status: "ok",
+	})
 }
