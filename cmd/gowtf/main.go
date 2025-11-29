@@ -84,7 +84,8 @@ func main() {
 	}
 
 	// Apply migrations
-	if _, err := db.Exec(migrations.InitialMigration); err != nil {
+	ctx := context.Background()
+	if err := migrations.ApplyMigrations(ctx, db, logger); err != nil {
 		logger.Error("Failed to apply migrations", "error", err)
 		os.Exit(1)
 	}

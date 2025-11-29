@@ -1,7 +1,9 @@
 package models
 
 import (
+	"context"
 	"database/sql"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -34,9 +36,11 @@ func NewTestDB(t *testing.T) *sql.DB {
 	// Close the DB after the test finishes
 	t.Cleanup(func() { db.Close() })
 
-	// Apply migration
-	if _, err := db.Exec(migrations.InitialMigration); err != nil {
-		t.Fatalf("failed applying migration: %v", err)
+	// Apply migrations
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	if err := migrations.ApplyMigrations(ctx, db, logger); err != nil {
+		t.Fatalf("failed applying migrations: %v", err)
 	}
 
 	return db
