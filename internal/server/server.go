@@ -8,8 +8,32 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/manujelko/gowtf/internal/models"
 )
+
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const requestIDKey contextKey = "request_id"
+
+// getRequestID extracts the request ID from the context
+func getRequestID(ctx context.Context) string {
+	if id, ok := ctx.Value(requestIDKey).(string); ok {
+		return id
+	}
+	return ""
+}
+
+// loggerWithRequestID creates a logger that includes request ID from context
+func (s *Server) loggerWithRequestID(ctx context.Context) *slog.Logger {
+	requestID := getRequestID(ctx)
+	if requestID != "" {
+		return s.logger.With("request_id", requestID)
+	}
+	return s.logger
+}
 
 type Server struct {
 	DB            *sql.DB
@@ -94,13 +118,37 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /ready", s.handleReady)
 
-	// Apply API key middleware if API key is set
-	handler := s.logRequest(mux)
+	// Apply middleware in order:
+	// 1. Request ID middleware (innermost)
+	// 2. Logging middleware
+	// 3. API key middleware (outermost)
+	handler := s.requestIDMiddleware(mux)
+	handler = s.logRequest(handler)
 	if s.APIKey != "" {
 		handler = s.apiKeyMiddleware(handler)
 	}
 
 	return handler
+}
+
+// requestIDMiddleware generates a unique request ID and adds it to the context and response headers
+func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Generate or extract request ID
+		requestID := r.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+
+		// Add request ID to context
+		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+
+		// Add request ID to response headers
+		w.Header().Set("X-Request-ID", requestID)
+
+		// Continue with the request using the new context
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
@@ -119,7 +167,7 @@ func (s *Server) apiKeyMiddleware(next http.Handler) http.Handler {
 
 		// Validate API key
 		if apiKey == "" || apiKey != s.APIKey {
-			s.logger.Warn("API authentication failed",
+			s.loggerWithRequestID(r.Context()).Warn("API authentication failed",
 				"method", r.Method,
 				"path", r.URL.Path,
 				"remote_addr", r.RemoteAddr)
@@ -140,7 +188,8 @@ func (s *Server) logRequest(next http.Handler) http.Handler {
 
 		next.ServeHTTP(ww, r)
 
-		s.logger.Info("HTTP request",
+		// Use logger with request ID from context
+		s.loggerWithRequestID(r.Context()).Info("HTTP request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", ww.statusCode,
