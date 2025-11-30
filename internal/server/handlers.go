@@ -1076,3 +1076,210 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		Status: "ok",
 	})
 }
+
+// APIEndpoint represents a single API endpoint documentation
+type APIEndpoint struct {
+	Method      string   `json:"method"`
+	Path        string   `json:"path"`
+	Description string   `json:"description"`
+	Auth        string   `json:"auth,omitempty"`
+	Parameters  []Param  `json:"parameters,omitempty"`
+	Response    Response `json:"response"`
+	Example     Example  `json:"example,omitempty"`
+}
+
+// Param represents a URL parameter
+type Param struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+// Response represents an API response
+type Response struct {
+	ContentType string       `json:"content_type"`
+	StatusCodes []StatusCode `json:"status_codes"`
+	Body        interface{}  `json:"body,omitempty"`
+}
+
+// StatusCode represents an HTTP status code with description
+type StatusCode struct {
+	Code        int    `json:"code"`
+	Description string `json:"description"`
+}
+
+// Example represents an example request/response
+type Example struct {
+	Request  string `json:"request,omitempty"`
+	Response string `json:"response,omitempty"`
+}
+
+// handleAPIDocs returns API documentation
+func (s *Server) handleAPIDocs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	authNote := "None (optional API key protection)"
+	if s.APIKey != "" {
+		authNote = "API key required (X-API-Key header or api_key query parameter)"
+	}
+
+	docs := struct {
+		Title     string        `json:"title"`
+		Version   string        `json:"version"`
+		BaseURL   string        `json:"base_url"`
+		Auth      string        `json:"authentication"`
+		Endpoints []APIEndpoint `json:"endpoints"`
+	}{
+		Title:   "gowtf API Documentation",
+		Version: "1.0",
+		BaseURL: fmt.Sprintf("http://%s", r.Host),
+		Auth:    authNote,
+		Endpoints: []APIEndpoint{
+			{
+				Method:      "POST",
+				Path:        "/api/workflow/{id}/toggle",
+				Description: "Toggle a workflow's enabled/disabled state",
+				Auth:        authNote,
+				Parameters: []Param{
+					{
+						Name:        "id",
+						Type:        "integer",
+						Description: "Workflow ID",
+						Required:    true,
+					},
+				},
+				Response: Response{
+					ContentType: "text/plain",
+					StatusCodes: []StatusCode{
+						{Code: 200, Description: "Workflow state toggled successfully"},
+						{Code: 400, Description: "Invalid workflow ID"},
+						{Code: 404, Description: "Workflow not found"},
+						{Code: 401, Description: "Unauthorized (if API key required)"},
+						{Code: 500, Description: "Internal server error"},
+					},
+				},
+				Example: Example{
+					Request:  "POST /api/workflow/1/toggle\nHeaders: X-API-Key: your-api-key",
+					Response: "OK",
+				},
+			},
+			{
+				Method:      "POST",
+				Path:        "/api/workflow/{id}/trigger",
+				Description: "Manually trigger a workflow run",
+				Auth:        authNote,
+				Parameters: []Param{
+					{
+						Name:        "id",
+						Type:        "integer",
+						Description: "Workflow ID",
+						Required:    true,
+					},
+				},
+				Response: Response{
+					ContentType: "application/json",
+					StatusCodes: []StatusCode{
+						{Code: 200, Description: "Workflow triggered successfully"},
+						{Code: 400, Description: "Invalid workflow ID or workflow is disabled"},
+						{Code: 404, Description: "Workflow not found"},
+						{Code: 401, Description: "Unauthorized (if API key required)"},
+						{Code: 500, Description: "Internal server error"},
+					},
+					Body: map[string]int{
+						"workflow_run_id": 123,
+					},
+				},
+				Example: Example{
+					Request:  "POST /api/workflow/1/trigger\nHeaders: X-API-Key: your-api-key",
+					Response: `{"workflow_run_id": 123}`,
+				},
+			},
+			{
+				Method:      "GET",
+				Path:        "/api/task-instance/{id}/logs",
+				Description: "Get stdout and stderr logs for a task instance",
+				Auth:        authNote,
+				Parameters: []Param{
+					{
+						Name:        "id",
+						Type:        "integer",
+						Description: "Task instance ID",
+						Required:    true,
+					},
+				},
+				Response: Response{
+					ContentType: "application/json",
+					StatusCodes: []StatusCode{
+						{Code: 200, Description: "Logs retrieved successfully"},
+						{Code: 400, Description: "Invalid task instance ID"},
+						{Code: 404, Description: "Task instance not found"},
+						{Code: 401, Description: "Unauthorized (if API key required)"},
+						{Code: 500, Description: "Internal server error"},
+					},
+					Body: map[string]interface{}{
+						"stdout":    "Task output...",
+						"stderr":    "Task errors...",
+						"task_name": "my-task",
+						"state":     "success",
+						"exit_code": 0,
+					},
+				},
+				Example: Example{
+					Request:  "GET /api/task-instance/456/logs\nHeaders: X-API-Key: your-api-key",
+					Response: `{"stdout":"Task output...","stderr":"Task errors...","task_name":"my-task","state":"success","exit_code":0}`,
+				},
+			},
+			{
+				Method:      "GET",
+				Path:        "/health",
+				Description: "Health check endpoint - checks database connectivity",
+				Response: Response{
+					ContentType: "application/json",
+					StatusCodes: []StatusCode{
+						{Code: 200, Description: "Service is healthy"},
+						{Code: 503, Description: "Service unavailable (database connection failed)"},
+					},
+					Body: map[string]string{
+						"status": "ok",
+					},
+				},
+				Example: Example{
+					Request:  "GET /health",
+					Response: `{"status":"ok"}`,
+				},
+			},
+			{
+				Method:      "GET",
+				Path:        "/ready",
+				Description: "Readiness check endpoint - verifies all components are initialized",
+				Response: Response{
+					ContentType: "application/json",
+					StatusCodes: []StatusCode{
+						{Code: 200, Description: "Service is ready"},
+						{Code: 503, Description: "Service not ready (components not initialized)"},
+					},
+					Body: map[string]interface{}{
+						"status": "ok",
+						"error":  nil,
+					},
+				},
+				Example: Example{
+					Request:  "GET /ready",
+					Response: `{"status":"ok"}`,
+				},
+			},
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	// Pretty-print JSON for readability
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	encoder.Encode(docs)
+}

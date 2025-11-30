@@ -115,6 +115,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/workflow/{id}/toggle", s.handleToggleWorkflow)
 	mux.HandleFunc("POST /api/workflow/{id}/trigger", s.handleTriggerWorkflow)
 	mux.HandleFunc("GET /api/task-instance/{id}/logs", s.handleTaskLogs)
+	mux.HandleFunc("GET /api/docs", s.handleAPIDocs)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /ready", s.handleReady)
 
