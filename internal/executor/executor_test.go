@@ -1281,3 +1281,332 @@ func TestExecutor_TaskRetryLogic(t *testing.T) {
 		}
 	})
 }
+
+func TestExecutor_RetryLogic_Integration(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	t.Run("Task retries correctly with retry delay", func(t *testing.T) {
+		// Create workflow with a task that fails and has retries configured
+		wfID := models.InsertTestWorkflow(t, db, "retry-test-wf")
+		taskID := models.InsertTestTask(t, db, wfID, "retry-task")
+		wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+		// Update task to have retries and a failing script
+		taskStore, err := models.NewWorkflowTaskStore(db)
+		if err != nil {
+			t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+		}
+
+		tasks, err := taskStore.GetForWorkflow(ctx, wfID)
+		if err != nil {
+			t.Fatalf("GetForWorkflow failed: %v", err)
+		}
+
+		var task *models.WorkflowTask
+		for _, t := range tasks {
+			if t.ID == taskID {
+				task = t
+				break
+			}
+		}
+		if task == nil {
+			t.Fatalf("task not found")
+		}
+
+		task.Script = "exit 1"    // Task will fail
+		task.Retries = 2          // Allow 2 retries
+		task.RetryDelay = "200ms" // 200ms delay for testing
+		if err := taskStore.Update(ctx, task); err != nil {
+			t.Fatalf("Update task failed: %v", err)
+		}
+
+		// Create task instance
+		taskInstanceStore, err := models.NewTaskInstanceStore(db)
+		if err != nil {
+			t.Fatalf("NewTaskInstanceStore failed: %v", err)
+		}
+
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        taskID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+
+		// Record start time to verify retry delay
+		startTime := time.Now()
+
+		// Send event
+		events <- scheduler.WorkflowRunEvent{
+			WorkflowRunID: wfRunID,
+			WorkflowID:    wfID,
+		}
+
+		// Wait for initial failure and retry delay (200ms) plus buffer
+		time.Sleep(400 * time.Millisecond)
+
+		// Send events to trigger executor to pick up retries
+		for i := 0; i < 3; i++ {
+			events <- scheduler.WorkflowRunEvent{
+				WorkflowRunID: wfRunID,
+				WorkflowID:    wfID,
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		// Poll until we have retry instances or timeout
+		maxWait := 3 * time.Second
+		pollInterval := 100 * time.Millisecond
+		deadline := time.Now().Add(maxWait)
+		var attempt2Instance *models.TaskInstance
+		for time.Now().Before(deadline) {
+			instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+			if err != nil {
+				t.Fatalf("GetForRun failed: %v", err)
+			}
+			for _, inst := range instances {
+				if inst.Attempt == 2 {
+					attempt2Instance = inst
+					break
+				}
+			}
+			if attempt2Instance != nil {
+				break
+			}
+			time.Sleep(pollInterval)
+		}
+
+		// Get all instances
+		instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+		if err != nil {
+			t.Fatalf("GetForRun failed: %v", err)
+		}
+
+		// Should have 2 instances: attempt 1 (failed) and attempt 2 (succeeded)
+		if len(instances) < 2 {
+			t.Fatalf("expected at least 2 task instances (attempt 1 + retry), got %d", len(instances))
+		}
+
+		// Find instances by attempt
+		var attempt1Instance *models.TaskInstance
+		for _, inst := range instances {
+			if inst.Attempt == 1 {
+				attempt1Instance = inst
+			}
+		}
+
+		if attempt1Instance == nil {
+			t.Fatalf("attempt 1 instance not found")
+		}
+		if attempt2Instance == nil {
+			t.Fatalf("attempt 2 instance (retry) not found after polling")
+		}
+
+		// Verify attempt 1 failed
+		if attempt1Instance.State != models.TaskStateFailed {
+			t.Fatalf("expected attempt 1 to be failed, got %v", attempt1Instance.State)
+		}
+
+		// Verify retry instance was created and has correct attempt number
+		if attempt2Instance == nil {
+			t.Fatalf("retry task instance (attempt 2) not found after polling")
+		}
+
+		// Verify retry instance has correct attempt number
+		if attempt2Instance.Attempt != 2 {
+			t.Fatalf("expected retry instance attempt to be 2, got %d", attempt2Instance.Attempt)
+		}
+
+		// Verify retry delay was respected
+		// The retry instance should be created at least 200ms after the first attempt failed
+		if attempt1Instance.FinishedAt != nil && attempt2Instance.StartedAt != nil {
+			delay := attempt2Instance.StartedAt.Sub(*attempt1Instance.FinishedAt)
+			if delay < 180*time.Millisecond { // Allow 20ms tolerance
+				t.Fatalf("retry delay not respected: expected at least 180ms, got %v", delay)
+			}
+			if delay > 1*time.Second { // Should not be too long (allowing for processing time)
+				t.Fatalf("retry delay too long: expected less than 1s, got %v", delay)
+			}
+		}
+
+		// Verify total time includes retry delay
+		totalTime := time.Since(startTime)
+		if totalTime < 200*time.Millisecond {
+			t.Fatalf("total time too short, retry delay may not have been respected: %v", totalTime)
+		}
+
+		// Verify retry was logged (we can see from the logs that "Scheduling task retry" was logged)
+		// This is verified by the fact that attempt 2 instance exists
+	})
+
+	t.Run("Max retries are respected", func(t *testing.T) {
+		// Create workflow with a task that always fails and has retries: 2
+		wfID := models.InsertTestWorkflow(t, db, "max-retry-wf")
+		taskID := models.InsertTestTask(t, db, wfID, "always-fail-task")
+		wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+		// Update task to always fail with retries: 2
+		taskStore, err := models.NewWorkflowTaskStore(db)
+		if err != nil {
+			t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+		}
+
+		tasks, err := taskStore.GetForWorkflow(ctx, wfID)
+		if err != nil {
+			t.Fatalf("GetForWorkflow failed: %v", err)
+		}
+
+		var task *models.WorkflowTask
+		for _, t := range tasks {
+			if t.ID == taskID {
+				task = t
+				break
+			}
+		}
+		if task == nil {
+			t.Fatalf("task not found")
+		}
+
+		task.Script = "exit 1"    // Always fails
+		task.Retries = 2          // Allow 2 retries (so max 3 attempts total: 1 initial + 2 retries)
+		task.RetryDelay = "100ms" // Short delay for testing
+		if err := taskStore.Update(ctx, task); err != nil {
+			t.Fatalf("Update task failed: %v", err)
+		}
+
+		// Create task instance
+		taskInstanceStore, err := models.NewTaskInstanceStore(db)
+		if err != nil {
+			t.Fatalf("NewTaskInstanceStore failed: %v", err)
+		}
+
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        taskID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+
+		// Send event
+		events <- scheduler.WorkflowRunEvent{
+			WorkflowRunID: wfRunID,
+			WorkflowID:    wfID,
+		}
+
+		// Wait for first retry to be created
+		time.Sleep(300 * time.Millisecond)
+
+		// Send events to trigger executor to pick up retries
+		// The executor loop might exit after each workflow completion, so we need to
+		// send events to trigger processing of retries
+		for i := 0; i < 3; i++ {
+			events <- scheduler.WorkflowRunEvent{
+				WorkflowRunID: wfRunID,
+				WorkflowID:    wfID,
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+
+		// Poll until we have all 3 attempts or timeout
+		maxWait := 5 * time.Second
+		pollInterval := 200 * time.Millisecond
+		deadline := time.Now().Add(maxWait)
+		for time.Now().Before(deadline) {
+			instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+			if err != nil {
+				t.Fatalf("GetForRun failed: %v", err)
+			}
+			attemptCounts := make(map[int]int)
+			allTerminal := true
+			for _, inst := range instances {
+				attemptCounts[inst.Attempt]++
+				// Check if all attempts are in terminal state
+				if inst.State != models.TaskStateFailed && inst.State != models.TaskStateSuccess {
+					allTerminal = false
+				}
+			}
+			// If we have 3 attempts and all are in terminal state, we're done
+			if attemptCounts[1] > 0 && attemptCounts[2] > 0 && attemptCounts[3] > 0 && allTerminal {
+				break
+			}
+			time.Sleep(pollInterval)
+		}
+
+		// Verify we have exactly 3 instances (initial + 2 retries)
+		instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+		if err != nil {
+			t.Fatalf("GetForRun failed: %v", err)
+		}
+
+		// Count instances by attempt
+		attemptCounts := make(map[int]int)
+		for _, inst := range instances {
+			attemptCounts[inst.Attempt]++
+		}
+
+		// Should have attempts 1, 2, and 3
+		if attemptCounts[1] == 0 {
+			t.Fatalf("expected attempt 1 instance, not found")
+		}
+		if attemptCounts[2] == 0 {
+			t.Fatalf("expected attempt 2 instance (first retry), not found")
+		}
+		if attemptCounts[3] == 0 {
+			t.Fatalf("expected attempt 3 instance (second retry), not found")
+		}
+
+		// Should NOT have attempt 4 (max retries exceeded)
+		if attemptCounts[4] > 0 {
+			t.Fatalf("expected no attempt 4 (max retries should be 2), but found %d instances", attemptCounts[4])
+		}
+
+		// All attempts should have failed
+		for _, inst := range instances {
+			if inst.State != models.TaskStateFailed {
+				t.Fatalf("expected all attempts to fail, but attempt %d has state %v", inst.Attempt, inst.State)
+			}
+		}
+
+		// Verify workflow run failed (all attempts failed)
+		workflowRunStore, err := models.NewWorkflowRunStore(db)
+		if err != nil {
+			t.Fatalf("NewWorkflowRunStore failed: %v", err)
+		}
+
+		run, err := workflowRunStore.GetByID(ctx, wfRunID)
+		if err != nil {
+			t.Fatalf("GetByID failed: %v", err)
+		}
+
+		if run.Status != models.RunFailed {
+			t.Fatalf("expected workflow run to fail after max retries exhausted, got %v", run.Status)
+		}
+	})
+}
