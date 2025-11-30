@@ -53,18 +53,12 @@ func validateIDParam(idStr string) (int, error) {
 	return id, nil
 }
 
-// validateAndSanitizePath validates and sanitizes a file path to prevent path traversal attacks
-// It ensures the path is within the baseDir and doesn't contain .. or escape the base directory
-// Accepts both absolute and relative paths, but ensures they're within baseDir
-// Returns the cleaned absolute path and an error if validation fails
+// validateAndSanitizePath validates that a path is within the baseDir
+// It resolves the path to absolute (relative to CWD if not already absolute)
+// and checks if it's contained in the absolute baseDir
 func validateAndSanitizePath(path string, baseDir string) (string, error) {
 	if path == "" {
 		return "", errors.New("path cannot be empty")
-	}
-
-	// Check for path traversal attempts
-	if strings.Contains(path, "..") {
-		return "", errors.New("path cannot contain '..' (path traversal not allowed)")
 	}
 
 	// Get absolute baseDir for comparison
@@ -73,17 +67,10 @@ func validateAndSanitizePath(path string, baseDir string) (string, error) {
 		return "", fmt.Errorf("failed to resolve base directory: %w", err)
 	}
 
-	var absPath string
-	if filepath.IsAbs(path) {
-		// Path is already absolute - clean it and verify it's within baseDir
-		absPath = filepath.Clean(path)
-	} else {
-		// Path is relative - join with baseDir and get absolute path
-		cleanedPath := filepath.Clean(path)
-		absPath, err = filepath.Abs(filepath.Join(baseDir, cleanedPath))
-		if err != nil {
-			return "", fmt.Errorf("failed to resolve path: %w", err)
-		}
+	// Get absolute path
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
 	}
 
 	// Ensure the resolved path is within baseDir
@@ -225,6 +212,7 @@ type GridCell struct {
 type WorkflowGridData struct {
 	Workflow *models.Workflow
 	Cells    []GridCell
+	ErrorMsg string // Error message if workflow file failed to parse
 }
 
 func (s *Server) handleWorkflowDetail(w http.ResponseWriter, r *http.Request) {
@@ -332,9 +320,17 @@ func (s *Server) handleWorkflowDetail(w http.ResponseWriter, r *http.Request) {
 		cells[j+1] = key
 	}
 
+	// Get error message for this workflow if any
+	var errorMsg string
+	if s.Watcher != nil {
+		workflowErrors := s.Watcher.GetErrorsByWorkflowName()
+		errorMsg = workflowErrors[workflow.Name]
+	}
+
 	data := WorkflowGridData{
 		Workflow: workflow,
 		Cells:    cells,
+		ErrorMsg: errorMsg,
 	}
 
 	// Check if this is an HTMX request (for auto-refresh)
@@ -365,6 +361,7 @@ func (s *Server) renderWorkflowGrid(w http.ResponseWriter, data WorkflowGridData
 type GraphNode struct {
 	Task         *models.WorkflowTask
 	Instance     *models.TaskInstance
+	Attempts     []*models.TaskInstance // All attempts for this task
 	State        string
 	X            float64
 	Y            float64
@@ -443,10 +440,10 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create a map of task ID to task instance
-	instanceMap := make(map[int]*models.TaskInstance)
+	// Create a map of task ID to list of task instances (to handle retries)
+	instanceMap := make(map[int][]*models.TaskInstance)
 	for _, ti := range taskInstances {
-		instanceMap[ti.TaskID] = ti
+		instanceMap[ti.TaskID] = append(instanceMap[ti.TaskID], ti)
 	}
 
 	// Build graph nodes and edges
@@ -458,10 +455,24 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 
 	// Create nodes for each task
 	for _, task := range tasks {
-		instance := instanceMap[task.ID]
+		var instance *models.TaskInstance
+		instances := instanceMap[task.ID]
+		if len(instances) > 0 {
+			// Use the latest instance (last one)
+			instance = instances[len(instances)-1]
+		}
+
 		state := "pending"
 		if instance != nil {
 			state = instance.State.String()
+			
+			// Handle retry states
+			// Show as "retrying" (orange) if it's a retry attempt (attempt > 1)
+			// This applies to both Pending (waiting to start) and Running (currently executing)
+			// This distinguishes the first attempt (Yellow) from retries (Orange)
+			if instance.Attempt > 1 && (instance.State == models.TaskStatePending || instance.State == models.TaskStateRunning) {
+				state = "retrying"
+			}
 		}
 
 		// Get dependencies for this task
@@ -474,6 +485,7 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 		nodes = append(nodes, GraphNode{
 			Task:         task,
 			Instance:     instance,
+			Attempts:     instances,
 			State:        state,
 			Dependencies: deps,
 		})
@@ -554,19 +566,41 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 
 	// Check if this is a JSON request (for auto-refresh)
 	if r.URL.Query().Get("format") == "json" {
-		// Return JSON with node states only
+		// Return JSON with node data
 		w.Header().Set("Content-Type", "application/json")
-		nodeStates := make(map[int]string)
-		for _, node := range nodes {
-			nodeStates[node.Task.ID] = node.State
+		
+		type NodeData struct {
+			State      string `json:"state"`
+			InstanceID *int   `json:"instance_id,omitempty"`
+			Attempts   []int  `json:"attempts,omitempty"`
 		}
+		
+		nodesData := make(map[int]NodeData)
+		for _, node := range nodes {
+			var instanceID *int
+			if node.Instance != nil {
+				instanceID = &node.Instance.ID
+			}
+			
+			var attempts []int
+			for _, attempt := range node.Attempts {
+				attempts = append(attempts, attempt.ID)
+			}
+			
+			nodesData[node.Task.ID] = NodeData{
+				State:      node.State,
+				InstanceID: instanceID,
+				Attempts:   attempts,
+			}
+		}
+		
 		jsonData := map[string]any{
 			"workflowRun": map[string]any{
 				"id":        workflowRun.ID,
 				"status":    workflowRun.Status.String(),
 				"startedAt": workflowRun.StartedAt,
 			},
-			"nodeStates": nodeStates,
+			"nodes": nodesData,
 		}
 		json.NewEncoder(w).Encode(jsonData)
 		return
@@ -892,11 +926,11 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 				if err == nil {
 					for _, task := range tasks {
 						if task.ID == taskInstance.TaskID {
-							// Construct path: outputDir/workflow-name/YYYY-MM-DD/HH-MM-SS/task-name/stdout.log
+							// Construct path: outputDir/workflow-name/YYYY-MM-DD/HH-MM-SS/task-name/attempt/stdout.log
 							dateDir := workflowRun.StartedAt.Format("2006-01-02")
 							timeDir := workflowRun.StartedAt.Format("15-04-05")
 							// Build relative path components (no path traversal possible here as we control all values)
-							relativePath := filepath.Join(workflow.Name, dateDir, timeDir, task.Name)
+							relativePath := filepath.Join(workflow.Name, dateDir, timeDir, task.Name, fmt.Sprintf("%d", taskInstance.Attempt))
 
 							if stdoutPath == "" {
 								// Validate the constructed path
@@ -927,14 +961,28 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 	// Read stdout
 	if stdoutPath != "" {
 		if content, err := os.ReadFile(stdoutPath); err == nil {
-			response.Stdout = string(content)
+			if len(content) == 0 {
+				response.Stdout = "(log file exists but is empty)"
+			} else {
+				response.Stdout = string(content)
+			}
+		} else {
+			// Debug: show why it failed
+			response.Stdout = fmt.Sprintf("[Debug] Failed to read stdout at %s: %v", stdoutPath, err)
 		}
 	}
 
 	// Read stderr
 	if stderrPath != "" {
 		if content, err := os.ReadFile(stderrPath); err == nil {
-			response.Stderr = string(content)
+			if len(content) == 0 {
+				response.Stderr = "(log file exists but is empty)"
+			} else {
+				response.Stderr = string(content)
+			}
+		} else {
+			// Debug: show why it failed
+			response.Stderr = fmt.Sprintf("[Debug] Failed to read stderr at %s: %v", stderrPath, err)
 		}
 	}
 

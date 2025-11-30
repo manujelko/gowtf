@@ -1,6 +1,16 @@
 {{ define "content" }}
 <div class="workflow-header">
     <h2>{{ .Workflow.Name }}</h2>
+    {{ if .ErrorMsg }}
+    <div class="error-alert prominent">
+        <span class="error-icon">⚠️</span>
+        <div class="error-content">
+            <strong class="error-title">Workflow File Error</strong>
+            <p class="error-text">{{ .ErrorMsg }}</p>
+            <p class="error-hint">Please check the workflow YAML file for syntax errors or missing fields.</p>
+        </div>
+    </div>
+    {{ end }}
     <p>
         {{ if .Workflow.Schedule }}
             <code>{{ .Workflow.Schedule }}</code>
@@ -72,4 +82,3 @@
     </div>
 </div>
 {{ end }}
-

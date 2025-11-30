@@ -689,9 +689,9 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 
 	select {
 	case result := <-pool.Results():
-		// Verify file paths follow expected structure: workflow-name/YYYY-MM-DD/HH-MM-SS/task-name/stdout.log
-		expectedStdoutPath := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName, "stdout.log")
-		expectedStderrPath := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName, "stderr.log")
+		// Verify file paths follow expected structure: workflow-name/YYYY-MM-DD/HH-MM-SS/task-name/attempt/stdout.log
+		expectedStdoutPath := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName, "1", "stdout.log")
+		expectedStderrPath := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName, "1", "stderr.log")
 
 		if result.StdoutPath != expectedStdoutPath {
 			t.Errorf("Expected stdout path %s, got %s", expectedStdoutPath, result.StdoutPath)
@@ -702,7 +702,7 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 		}
 
 		// Verify directory was created
-		taskDir := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName)
+		taskDir := filepath.Join(outputDir, workflowName, "2025-11-26", "13-11-23", taskName, "1")
 		if _, err := os.Stat(taskDir); os.IsNotExist(err) {
 			t.Errorf("Task directory does not exist: %s", taskDir)
 		}

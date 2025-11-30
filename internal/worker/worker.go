@@ -67,8 +67,14 @@ func NewWorkerPool(size int, outputDir string, logger *slog.Logger) (*WorkerPool
 		return nil, fmt.Errorf("output directory cannot be empty")
 	}
 
+	// Resolve absolute path for output directory
+	absOutputDir, err := filepath.Abs(outputDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve output directory: %w", err)
+	}
+
 	// Create output directory if it doesn't exist
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(absOutputDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create output directory: %w", err)
 	}
 
@@ -76,7 +82,7 @@ func NewWorkerPool(size int, outputDir string, logger *slog.Logger) (*WorkerPool
 
 	return &WorkerPool{
 		size:              size,
-		outputDir:         outputDir,
+		outputDir:         absOutputDir,
 		logger:            logger,
 		jobChan:           make(chan TaskJob, size*2), // Buffer to allow some queuing
 		resultChan:        make(chan TaskResult, size*2),
@@ -193,10 +199,10 @@ func (wp *WorkerPool) executeTask(ctx context.Context, job TaskJob) TaskResult {
 		ExitCode:       -1,
 	}
 
-	// Build directory structure: workflow-name/YYYY-MM-DD/HH-MM-SS/task-name
+	// Build directory structure: workflow-name/YYYY-MM-DD/HH-MM-SS/task-name/attempt
 	dateDir := job.RunStartedAt.Format("2006-01-02")
 	timeDir := job.RunStartedAt.Format("15-04-05")
-	taskDir := filepath.Join(wp.outputDir, job.WorkflowName, dateDir, timeDir, job.Task.Name)
+	taskDir := filepath.Join(wp.outputDir, job.WorkflowName, dateDir, timeDir, job.Task.Name, fmt.Sprintf("%d", job.TaskInstance.Attempt))
 
 	if err := os.MkdirAll(taskDir, 0755); err != nil {
 		result.Error = fmt.Errorf("failed to create task directory: %w", err)

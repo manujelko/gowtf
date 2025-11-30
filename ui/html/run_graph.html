@@ -49,6 +49,7 @@
                         data-task-name="{{ .Task.Name }}"
                         data-state="{{ .State }}"
                         {{ if .Instance }}data-instance-id="{{ .Instance.ID }}"{{ end }}
+                        data-attempts="{{ range $i, $a := .Attempts }}{{ if gt $i 0 }},{{ end }}{{ $a.ID }}{{ end }}"
                         style="cursor: pointer;"/>
                 <text x="{{ .X }}" y="{{ .Y }}" 
                       text-anchor="middle" 
@@ -78,6 +79,10 @@
             <div class="legend-item">
                 <span class="legend-color status-running"></span>
                 <span>Running</span>
+            </div>
+            <div class="legend-item">
+                <span class="legend-color status-retrying"></span>
+                <span>Retrying</span>
             </div>
             <div class="legend-item">
                 <span class="legend-color status-pending"></span>

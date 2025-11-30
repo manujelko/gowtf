@@ -6,6 +6,7 @@
     --status-success: #28a745;
     --status-failure: #dc3545;
     --status-running: #ffc107;
+    --status-retrying: #fd7e14;
     --status-pending: #6c757d;
     --status-queued: #17a2b8;
     --status-skipped: #ffb3d9;
@@ -135,6 +136,7 @@ th {
 .status-success { background-color: var(--status-success); }
 .status-failure { background-color: var(--status-failure); }
 .status-running { background-color: var(--status-running); color: #000; }
+.status-retrying { background-color: var(--status-retrying); color: #fff; }
 .status-pending { background-color: var(--status-pending); }
 .status-queued { background-color: var(--status-queued); }
 .status-skipped { background-color: var(--status-skipped); }
@@ -297,6 +299,12 @@ nav .btn {
     color: #000;
 }
 
+.grid-cell.status-retrying {
+    background-color: var(--status-retrying);
+    border-color: var(--status-retrying);
+    color: #fff;
+}
+
 .grid-cell.status-pending {
     background-color: var(--status-pending);
     border-color: var(--status-pending);
@@ -363,6 +371,11 @@ nav .btn {
 .legend-color.status-running {
     background-color: var(--status-running);
     border-color: var(--status-running);
+}
+
+.legend-color.status-retrying {
+    background-color: var(--status-retrying);
+    border-color: var(--status-retrying);
 }
 
 .legend-color.status-pending {
@@ -448,6 +461,10 @@ nav .btn {
     fill: var(--status-running);
 }
 
+.graph-node.status-retrying {
+    fill: var(--status-retrying);
+}
+
 .graph-node.status-pending {
     fill: var(--status-pending);
 }
@@ -528,6 +545,94 @@ nav .btn {
     font-size: 0.75rem;
     margin-top: 0.25rem;
     font-weight: normal;
+}
+
+.error-alert {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    margin: 0.75rem 0;
+    background-color: rgba(220, 53, 69, 0.1);
+    border: 1px solid var(--status-failure);
+    border-left: 4px solid var(--status-failure);
+    border-radius: 4px;
+    align-items: flex-start;
+}
+
+.error-alert.prominent {
+    background-color: rgba(220, 53, 69, 0.15);
+    padding: 1rem 1.25rem;
+    margin: 1rem 0;
+}
+
+.error-icon {
+    font-size: 1.25rem;
+    flex-shrink: 0;
+    line-height: 1.2;
+}
+
+.error-content {
+    flex: 1;
+}
+
+.error-title {
+    display: block;
+    color: var(--status-failure);
+    font-size: 0.875rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.error-text {
+    color: var(--text-color);
+    font-size: 0.875rem;
+    margin: 0.25rem 0;
+    line-height: 1.4;
+}
+
+.error-hint {
+    color: var(--text-color);
+    font-size: 0.8125rem;
+    margin: 0.5rem 0 0 0;
+    opacity: 0.8;
+    font-style: italic;
+}
+
+.error-link {
+    display: inline-block;
+    color: var(--status-failure);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    margin-top: 0.5rem;
+    text-decoration: underline;
+}
+
+.error-link:hover {
+    text-decoration: none;
+    opacity: 0.8;
+}
+
+.view-logs-btn {
+    background: var(--status-failure);
+    color: white;
+    border-color: var(--status-failure);
+    font-size: 0.8125rem;
+    padding: 0.25rem 0.5rem;
+    text-decoration: none;
+}
+
+.view-logs-btn:hover {
+    background: var(--status-failure);
+    filter: brightness(0.9);
+    text-decoration: none;
+}
+
+.failed-indicator {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    font-size: 0.7rem;
+    opacity: 0.9;
 }
 
 .theme-icon {
@@ -663,3 +768,29 @@ nav .btn {
 }
 
 
+.log-attempts {
+    display: flex;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+
+.attempt-btn {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--border-color);
+    background: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8125rem;
+}
+
+.attempt-btn:hover {
+    background: var(--nav-bg);
+}
+
+.attempt-btn.active {
+    background: var(--status-running);
+    color: black;
+    border-color: var(--status-running);
+    font-weight: 600;
+}

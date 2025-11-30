@@ -69,8 +69,13 @@
             <td>
                 <strong><a href="/workflow/{{ .ID }}">{{ .Name }}</a></strong>
                 {{ if .ErrorMsg }}
-                    <div class="error-message" title="{{ .ErrorMsg }}">
-                        ⚠️ {{ .ErrorMsg }}
+                    <div class="error-alert">
+                        <span class="error-icon">⚠️</span>
+                        <div class="error-content">
+                            <strong class="error-title">Workflow Error</strong>
+                            <p class="error-text">{{ .ErrorMsg }}</p>
+                            <a href="/workflow/{{ .ID }}" class="error-link">View workflow details →</a>
+                        </div>
                     </div>
                 {{ end }}
             </td>
@@ -112,6 +117,11 @@
             <td>{{ .UpdatedAt.Format "Jan 02 15:04" }}</td>
             <td>
                 <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    {{ if and .LatestRun (eq (.LatestRun.Status.String) "failed") }}
+                        <a href="/run/{{ .LatestRun.ID }}?showLogs=true" class="btn view-logs-btn" title="View logs for failed run">
+                            📋 Logs
+                        </a>
+                    {{ end }}
                     <button 
                         class="trigger-btn btn"
                         hx-post="/api/workflow/{{ .ID }}/trigger"

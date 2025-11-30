@@ -1,0 +1,26 @@
+.log-attempts {
+    display: flex;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+
+.attempt-btn {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--border-color);
+    background: var(--bg-color);
+    color: var(--text-color);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.8125rem;
+}
+
+.attempt-btn:hover {
+    background: var(--nav-bg);
+}
+
+.attempt-btn.active {
+    background: var(--status-running);
+    color: black;
+    border-color: var(--status-running);
+    font-weight: 600;
+}

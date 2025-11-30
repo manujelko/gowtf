@@ -136,10 +136,11 @@
                 const node = nodeGroup.querySelector('.graph-node');
                 if (node && (e.target === node || e.target.closest('.graph-node-group'))) {
                     const instanceID = node.getAttribute('data-instance-id');
+                    const attemptIDs = node.getAttribute('data-attempts');
                     if (instanceID) {
                         e.preventDefault();
                         e.stopPropagation();
-                        showTaskLogs(instanceID);
+                        showTaskLogs(instanceID, attemptIDs);
                     } else {
                         const taskName = node.getAttribute('data-task-name');
                         alert(`Task "${taskName}" has not started yet. No logs available.`);
@@ -192,32 +193,17 @@
 
     function handleMouseDown(e) {
         if (e.button !== 0) return; // Only left mouse button
-        // Handle node clicks
-        if (e.target.classList.contains('graph-node') || 
-            e.target.closest('.graph-node-group')) {
-            const nodeGroup = e.target.closest('.graph-node-group');
-            if (nodeGroup) {
-                const node = nodeGroup.querySelector('.graph-node');
-                if (node) {
-                    const instanceID = node.getAttribute('data-instance-id');
-                    if (instanceID) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        showTaskLogs(instanceID);
-                        return;
-                    } else {
-                        // No instance yet (task hasn't started)
-                        const taskName = node.getAttribute('data-task-name');
-                        alert(`Task "${taskName}" has not started yet. No logs available.`);
-                    }
-                }
-            }
-            return;
-        }
+        
         // Don't pan if clicking on label
         if (e.target.classList.contains('graph-node-label')) {
             return;
         }
+        
+        // Don't pan if clicking a node (let click handler handle it)
+        if (e.target.classList.contains('graph-node') || e.target.closest('.graph-node-group')) {
+            return; 
+        }
+
         isPanning = true;
         startPoint = { x: e.clientX, y: e.clientY };
         svg.style.cursor = 'grabbing';
@@ -258,7 +244,6 @@
         }
     }
 
-    // No longer need MutationObserver since SVG won't be replaced
     function startObserving() {
         // Not needed anymore - SVG stays in DOM
     }
@@ -268,6 +253,29 @@
         initGraph();
         startObserving();
         startAutoRefresh();
+        
+        // Check if we should auto-open logs for failed tasks
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('showLogs') === 'true') {
+            // Wait a bit for the graph to render, then find first failed task
+            setTimeout(function() {
+                const svg = document.querySelector('.graph-svg');
+                if (svg) {
+                    const failedNodes = svg.querySelectorAll('.graph-node.status-failed[data-instance-id]');
+                    if (failedNodes.length > 0) {
+                        const firstFailedNode = failedNodes[0];
+                        const instanceID = firstFailedNode.getAttribute('data-instance-id');
+                        const attemptIDs = firstFailedNode.getAttribute('data-attempts');
+                        if (instanceID) {
+                            showTaskLogs(instanceID, attemptIDs);
+                            // Remove query parameter from URL without reload
+                            const newUrl = window.location.pathname;
+                            window.history.replaceState({}, '', newUrl);
+                        }
+                    }
+                }
+            }, 500);
+        }
     }
 
     if (document.readyState === 'loading') {
@@ -280,9 +288,6 @@
     window.addEventListener('beforeunload', function() {
         stopAutoRefresh();
         cleanup();
-        if (observer) {
-            observer.disconnect();
-        }
     });
 
     // Auto-refresh node states without replacing SVG (no HTMX)
@@ -301,8 +306,37 @@
             fetch(url)
                 .then(response => response.json())
                 .then(data => {
-                    // Update node states without touching the SVG structure
-                    if (data.nodeStates && svg) {
+                    // Update node data
+                    const nodesData = data.nodes;
+                    if (nodesData && svg) {
+                        const nodes = svg.querySelectorAll('.graph-node');
+                        nodes.forEach(node => {
+                            const taskID = parseInt(node.getAttribute('data-task-id'));
+                            const nodeData = nodesData[taskID];
+                            if (nodeData) {
+                                // Update state
+                                const newState = nodeData.state;
+                                const currentState = node.getAttribute('data-state');
+                                if (currentState !== newState) {
+                                    node.setAttribute('data-state', newState);
+                                    node.classList.remove('status-pending', 'status-queued', 'status-running', 
+                                                          'status-success', 'status-failed', 'status-skipped', 'status-retrying');
+                                    node.classList.add('status-' + newState);
+                                }
+
+                                // Update instance ID
+                                if (nodeData.instance_id) {
+                                    node.setAttribute('data-instance-id', nodeData.instance_id);
+                                }
+
+                                // Update attempts
+                                if (nodeData.attempts && nodeData.attempts.length > 0) {
+                                    node.setAttribute('data-attempts', nodeData.attempts.join(','));
+                                }
+                            }
+                        });
+                    } else if (data.nodeStates && svg) {
+                        // Backward compatibility
                         const nodes = svg.querySelectorAll('.graph-node');
                         nodes.forEach(node => {
                             const taskID = parseInt(node.getAttribute('data-task-id'));
@@ -314,7 +348,7 @@
                                     node.setAttribute('data-state', newState);
                                     // Update class
                                     node.classList.remove('status-pending', 'status-queued', 'status-running', 
-                                                          'status-success', 'status-failed', 'status-skipped');
+                                                          'status-success', 'status-failed', 'status-skipped', 'status-retrying');
                                     node.classList.add('status-' + newState);
                                 }
                             }
@@ -335,12 +369,32 @@
     }
 
     // Show task logs in a modal
-    function showTaskLogs(instanceID) {
+    function showTaskLogs(instanceID, attemptIDs) {
         let logRefreshInterval = null;
         let isAutoScrolling = true;
+        let currentInstanceID = parseInt(instanceID);
+
+        // Parse attempts
+        let attempts = [];
+        if (attemptIDs && String(attemptIDs).trim() !== "") {
+            attempts = String(attemptIDs).split(',').map(id => parseInt(id)).filter(id => !isNaN(id));
+        }
+        
+        // Ensure current instance is in list
+        if (!isNaN(currentInstanceID)) {
+            if (attempts.length === 0) {
+                attempts = [currentInstanceID];
+            } else if (!attempts.includes(currentInstanceID)) {
+                attempts.push(currentInstanceID);
+                attempts.sort((a, b) => a - b);
+            }
+        } else if (attempts.length > 0) {
+            currentInstanceID = attempts[0];
+        }
 
         function loadLogs() {
-            fetch(`/api/task-instance/${instanceID}/logs`)
+            const t = new Date().getTime();
+            fetch(`/api/task-instance/${currentInstanceID}/logs?t=${t}`)
                 .then(response => response.json())
                 .then(data => {
                     // Update status badge
@@ -348,6 +402,20 @@
                     if (badge) {
                         badge.className = 'badge status-' + data.state;
                         badge.textContent = data.state;
+                    }
+
+                    // Handle skipped state
+                    if (data.state === 'skipped') {
+                        const stdoutEl = document.getElementById('stdout-content');
+                        const stderrEl = document.getElementById('stderr-content');
+                        if (stdoutEl) stdoutEl.textContent = 'Task was skipped.';
+                        if (stderrEl) stderrEl.textContent = 'Task was skipped.';
+                        
+                        if (logRefreshInterval) {
+                            clearInterval(logRefreshInterval);
+                            logRefreshInterval = null;
+                        }
+                        return;
                     }
 
                     // Update exit code
@@ -362,6 +430,14 @@
                         } else {
                             exitCodeSpan.textContent = `Exit Code: ${data.exit_code}`;
                         }
+                    } else if (exitCodeSpan) {
+                        exitCodeSpan.remove();
+                    }
+                    
+                    // Update task name if available
+                    const taskNameEl = modal.querySelector('#task-name');
+                    if (taskNameEl && data.task_name) {
+                        taskNameEl.textContent = data.task_name;
                     }
 
                     // Update stdout
@@ -401,6 +477,17 @@
                 });
         }
 
+        // Create attempts HTML
+        let attemptsHtml = '';
+        if (attempts.length > 1) {
+            attemptsHtml = '<div class="log-attempts">';
+            attempts.forEach((id, index) => {
+                const isActive = id === currentInstanceID ? 'active' : '';
+                attemptsHtml += `<button class="attempt-btn ${isActive}" data-id="${id}">Attempt ${index + 1}</button>`;
+            });
+            attemptsHtml += '</div>';
+        }
+
         // Create modal
         const modal = document.createElement('div');
         modal.className = 'log-modal';
@@ -408,11 +495,12 @@
             <div class="log-modal-content">
                 <div class="log-modal-header">
                     <h3>Task Logs: <span id="task-name">Loading...</span></h3>
-                    <button class="log-modal-close" onclick="this.closest('.log-modal').remove()">×</button>
+                    <button class="log-modal-close">×</button>
                 </div>
                 <div class="log-modal-body">
                     <div class="log-info">
                         <span class="badge status-pending">Loading...</span>
+                        ${attemptsHtml}
                     </div>
                     <div class="log-tabs">
                         <button class="log-tab active" data-tab="stdout">Stdout</button>
@@ -425,89 +513,67 @@
                 </div>
             </div>
         `;
+
         document.body.appendChild(modal);
-
-        // Load initial logs
-        loadLogs();
-
-        // Start auto-refresh every 1 second if task is still running
-        logRefreshInterval = setInterval(() => {
-            loadLogs();
-        }, 1000);
-
-        // Track scroll position to determine if we should auto-scroll
-        const stdoutEl = document.getElementById('stdout-content');
-        const stderrEl = document.getElementById('stderr-content');
         
-        if (stdoutEl) {
-            stdoutEl.addEventListener('scroll', function() {
-                const isAtBottom = this.scrollHeight - this.scrollTop <= this.clientHeight + 10;
-                isAutoScrolling = isAtBottom;
-            });
-        }
-        
-        if (stderrEl) {
-            stderrEl.addEventListener('scroll', function() {
-                const isAtBottom = this.scrollHeight - this.scrollTop <= this.clientHeight + 10;
-                isAutoScrolling = isAtBottom;
+        // Close button handler
+        modal.querySelector('.log-modal-close').onclick = () => {
+            modal.remove();
+            if (logRefreshInterval) clearInterval(logRefreshInterval);
+        };
+
+        // Close on click outside
+        modal.onclick = (e) => {
+            if (e.target === modal) {
+                modal.remove();
+                if (logRefreshInterval) clearInterval(logRefreshInterval);
+            }
+        };
+
+        // Attempt switching
+        if (attempts.length > 1) {
+            const attemptBtns = modal.querySelectorAll('.attempt-btn');
+            attemptBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // Update active button
+                    attemptBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    
+                    // Switch instance ID and reload
+                    currentInstanceID = parseInt(btn.dataset.id);
+                    
+                    // Reset content to loading state
+                    const stdoutEl = document.getElementById('stdout-content');
+                    const stderrEl = document.getElementById('stderr-content');
+                    if (stdoutEl) stdoutEl.textContent = 'Loading...';
+                    if (stderrEl) stderrEl.textContent = 'Loading...';
+                    
+                    // Stop existing refresh interval and start new one
+                    if (logRefreshInterval) clearInterval(logRefreshInterval);
+                    loadLogs();
+                    logRefreshInterval = setInterval(loadLogs, 2000);
+                });
             });
         }
 
         // Tab switching
-        modal.querySelectorAll('.log-tab').forEach(tab => {
-            tab.addEventListener('click', function() {
-                modal.querySelectorAll('.log-tab').forEach(t => t.classList.remove('active'));
-                modal.querySelectorAll('.log-output').forEach(o => o.classList.remove('active'));
-                this.classList.add('active');
-                const tabName = this.getAttribute('data-tab');
-                const contentEl = document.getElementById(tabName + '-content');
-                if (contentEl) {
-                    contentEl.classList.add('active');
-                    // Auto-scroll to bottom when switching tabs
-                    setTimeout(() => {
-                        contentEl.scrollTop = contentEl.scrollHeight;
-                    }, 0);
-                }
-            });
+        const tabs = modal.querySelectorAll('.log-tab');
+        tabs.forEach(tab => {
+            tab.onclick = () => {
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                
+                const type = tab.dataset.tab;
+                document.querySelectorAll('.log-output').forEach(out => {
+                    out.classList.remove('active');
+                });
+                document.getElementById(`${type}-content`).classList.add('active');
+            };
         });
 
-        // Close on background click
-        modal.addEventListener('click', function(e) {
-            if (e.target === modal) {
-                if (logRefreshInterval) {
-                    clearInterval(logRefreshInterval);
-                }
-                modal.remove();
-            }
-        });
-
-        // Close on Escape key
-        const closeHandler = function(e) {
-            if (e.key === 'Escape') {
-                if (logRefreshInterval) {
-                    clearInterval(logRefreshInterval);
-                }
-                modal.remove();
-                document.removeEventListener('keydown', closeHandler);
-            }
-        };
-        document.addEventListener('keydown', closeHandler);
-
-        // Update task name after first load
-        fetch(`/api/task-instance/${instanceID}/logs`)
-            .then(response => response.json())
-            .then(data => {
-                const taskNameEl = document.getElementById('task-name');
-                if (taskNameEl) {
-                    taskNameEl.textContent = data.task_name || 'Unknown';
-                }
-            });
-    }
-
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        // Initial load
+        loadLogs();
+        // Refresh every 1 second
+        logRefreshInterval = setInterval(loadLogs, 1000);
     }
 })();
-

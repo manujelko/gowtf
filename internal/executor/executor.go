@@ -24,7 +24,7 @@ type Executor struct {
 	taskInstanceStore *models.TaskInstanceStore
 	depsStore         *models.TaskDependenciesStore
 
-	events        <-chan scheduler.WorkflowRunEvent
+	events        chan scheduler.WorkflowRunEvent
 	workerPool    *worker.WorkerPool
 	healthMonitor *health.HealthMonitor
 	logger        *slog.Logger
@@ -35,7 +35,7 @@ type Executor struct {
 }
 
 // NewExecutor creates a new executor instance
-func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize int, outputDir string, logger *slog.Logger) (*Executor, error) {
+func NewExecutor(db *sql.DB, events chan scheduler.WorkflowRunEvent, poolSize int, outputDir string, logger *slog.Logger) (*Executor, error) {
 	workflowStore, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workflow store: %w", err)
@@ -948,6 +948,15 @@ func (e *Executor) handleTaskRetry(ctx context.Context, taskInstance *models.Tas
 			"new_task_instance_id", newTaskInstance.ID,
 			"workflow_run_id", workflowRunID,
 			"attempt", newTaskInstance.Attempt)
+
+		// Notify executor to process this run again
+		// Send in a non-blocking way or new goroutine to avoid deadlocks if channel is full
+		go func() {
+			e.events <- scheduler.WorkflowRunEvent{
+				WorkflowRunID: workflowRunID,
+				WorkflowID:    workflowRun.WorkflowID,
+			}
+		}()
 	}()
 
 	return nil
