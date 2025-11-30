@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"math"
 	"net/http"
 	"os"
@@ -102,26 +101,15 @@ func validateAndSanitizePath(path string, baseDir string) (string, error) {
 }
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, tmpl string, data any) {
-	baseDir := "ui/html"
-	// Check if directory exists, if not try to find it relative to project root from internal/server
-	if _, err := os.Stat(baseDir); os.IsNotExist(err) {
-		if _, err := os.Stat("../../" + baseDir); err == nil {
-			baseDir = "../../" + baseDir
-		}
-	}
-
-	files := []string{
-		filepath.Join(baseDir, "base.html"),
-		filepath.Join(baseDir, tmpl),
-	}
-
-	ts, err := template.ParseFiles(files...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Get the template set for this page
+	t, ok := s.templates[tmpl]
+	if !ok {
+		http.Error(w, fmt.Sprintf("Template not found: %s", tmpl), http.StatusInternalServerError)
 		return
 	}
 
-	err = ts.ExecuteTemplate(w, "base.html", data)
+	// Execute the base template which will use the "content" block from the child template
+	err := t.ExecuteTemplate(w, "base.html", data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -211,28 +199,17 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderWorkflowTable(w http.ResponseWriter, workflows []WorkflowWithStatus) {
-	baseDir := "ui/html"
-	if _, err := os.Stat(baseDir); os.IsNotExist(err) {
-		if _, err := os.Stat("../../" + baseDir); err == nil {
-			baseDir = "../../" + baseDir
-		}
-	}
-
-	files := []string{
-		filepath.Join(baseDir, "dashboard.html"),
-	}
-
-	ts, err := template.ParseFiles(files...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Execute just the workflow-table fragment (defined in dashboard.html)
+	t, ok := s.templates["dashboard.html"]
+	if !ok {
+		http.Error(w, "Template dashboard.html not found", http.StatusInternalServerError)
 		return
 	}
 
-	// Execute just the workflow-table fragment
 	data := map[string]any{
 		"Workflows": workflows,
 	}
-	err = ts.ExecuteTemplate(w, "workflow-table", data)
+	err := t.ExecuteTemplate(w, "workflow-table", data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -372,25 +349,14 @@ func (s *Server) handleWorkflowDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderWorkflowGrid(w http.ResponseWriter, data WorkflowGridData) {
-	baseDir := "ui/html"
-	if _, err := os.Stat(baseDir); os.IsNotExist(err) {
-		if _, err := os.Stat("../../" + baseDir); err == nil {
-			baseDir = "../../" + baseDir
-		}
-	}
-
-	files := []string{
-		filepath.Join(baseDir, "workflow_grid.html"),
-	}
-
-	ts, err := template.ParseFiles(files...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Execute just the workflow-grid fragment (defined in workflow_grid.html)
+	t, ok := s.templates["workflow_grid.html"]
+	if !ok {
+		http.Error(w, "Template workflow_grid.html not found", http.StatusInternalServerError)
 		return
 	}
 
-	// Execute just the workflow-grid fragment
-	err = ts.ExecuteTemplate(w, "workflow-grid", data)
+	err := t.ExecuteTemplate(w, "workflow-grid", data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -693,25 +659,14 @@ func calculateLayout(nodes []GraphNode, edges []struct{ From, To int }) {
 }
 
 func (s *Server) renderRunGraph(w http.ResponseWriter, data GraphData) {
-	baseDir := "ui/html"
-	if _, err := os.Stat(baseDir); os.IsNotExist(err) {
-		if _, err := os.Stat("../../" + baseDir); err == nil {
-			baseDir = "../../" + baseDir
-		}
-	}
-
-	files := []string{
-		filepath.Join(baseDir, "run_graph.html"),
-	}
-
-	ts, err := template.ParseFiles(files...)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Execute just the run-graph fragment (defined in run_graph.html)
+	t, ok := s.templates["run_graph.html"]
+	if !ok {
+		http.Error(w, "Template run_graph.html not found", http.StatusInternalServerError)
 		return
 	}
 
-	// Execute just the graph fragment
-	err = ts.ExecuteTemplate(w, "run-graph", data)
+	err := t.ExecuteTemplate(w, "run-graph", data)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

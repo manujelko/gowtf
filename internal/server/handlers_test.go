@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,17 +29,6 @@ func setupTestServer(t *testing.T) *Server {
 }
 
 func TestHandleHome(t *testing.T) {
-	// Hack: We need to make sure we are in the project root for templates
-	wd, _ := os.Getwd()
-	if !strings.HasSuffix(wd, "gowtf") {
-		// Attempt to move up to root
-		// This is brittle but works for `go test ./internal/server/...`
-		if _, err := os.Stat("../../ui/html"); err == nil {
-			os.Chdir("../../")
-			defer os.Chdir(wd)
-		}
-	}
-
 	srv := setupTestServer(t)
 
 	// Insert some data

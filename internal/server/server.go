@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"html/template"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -47,6 +49,7 @@ type Server struct {
 	OutputDir     string
 	APIKey        string
 	rateLimiter   *RateLimiter
+	templates     map[string]*template.Template
 	logger        *slog.Logger
 	httpServer    *http.Server
 }
@@ -94,6 +97,12 @@ func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, out
 		rateLimiter = NewRateLimiter(requestsPerMinute, logger)
 	}
 
+	// Parse templates from embedded filesystem
+	templates, err := initTemplates()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse templates: %w", err)
+	}
+
 	return &Server{
 		DB:            db,
 		Workflows:     workflows,
@@ -106,6 +115,7 @@ func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, out
 		OutputDir:     outputDir,
 		APIKey:        apiKey,
 		rateLimiter:   rateLimiter,
+		templates:     templates,
 		logger:        logger,
 	}, nil
 }
