@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/manujelko/gowtf/internal/health"
 	"github.com/manujelko/gowtf/internal/models"
+	"github.com/manujelko/gowtf/internal/workflow"
 )
 
 // TaskJob represents a task to be executed by a worker
@@ -18,6 +20,7 @@ type TaskJob struct {
 	TaskInstance *models.TaskInstance
 	Task         *models.WorkflowTask
 	WorkflowName string
+	WorkflowEnv  map[string]string // Workflow-level environment variables
 	RunStartedAt time.Time
 	OutputDir    string
 	Context      context.Context
@@ -37,6 +40,7 @@ type TaskResult struct {
 type WorkerPool struct {
 	size      int
 	outputDir string
+	logger    *slog.Logger
 
 	jobChan    chan TaskJob
 	resultChan chan TaskResult
@@ -54,7 +58,7 @@ type WorkerPool struct {
 }
 
 // NewWorkerPool creates a new worker pool with the specified size and output directory
-func NewWorkerPool(size int, outputDir string) (*WorkerPool, error) {
+func NewWorkerPool(size int, outputDir string, logger *slog.Logger) (*WorkerPool, error) {
 	if size <= 0 {
 		return nil, fmt.Errorf("worker pool size must be greater than 0")
 	}
@@ -73,6 +77,7 @@ func NewWorkerPool(size int, outputDir string) (*WorkerPool, error) {
 	return &WorkerPool{
 		size:              size,
 		outputDir:         outputDir,
+		logger:            logger,
 		jobChan:           make(chan TaskJob, size*2), // Buffer to allow some queuing
 		resultChan:        make(chan TaskResult, size*2),
 		heartbeatInterval: 5 * time.Second, // Default heartbeat interval
@@ -250,7 +255,38 @@ func (wp *WorkerPool) executeTask(ctx context.Context, job TaskJob) TaskResult {
 
 	// Build environment variables
 	env := os.Environ()
-	for k, v := range job.Task.Env {
+
+	// Merge workflow and task env (workflow env first, task env overrides)
+	mergedEnv := make(map[string]string)
+
+	// Add workflow-level env first
+	if job.WorkflowEnv != nil {
+		// Resolve workflow-level env var references
+		resolvedWorkflowEnv := workflow.ResolveEnvMap(job.WorkflowEnv, wp.logger.With(
+			"task", job.Task.Name,
+			"workflow", job.WorkflowName,
+			"env_level", "workflow",
+		))
+		for k, v := range resolvedWorkflowEnv {
+			mergedEnv[k] = v
+		}
+	}
+
+	// Add task-level env (overrides workflow env)
+	if job.Task.Env != nil {
+		// Resolve task-level env var references
+		resolvedTaskEnv := workflow.ResolveEnvMap(job.Task.Env, wp.logger.With(
+			"task", job.Task.Name,
+			"workflow", job.WorkflowName,
+			"env_level", "task",
+		))
+		for k, v := range resolvedTaskEnv {
+			mergedEnv[k] = v
+		}
+	}
+
+	// Add merged env to process env
+	for k, v := range mergedEnv {
 		env = append(env, fmt.Sprintf("%s=%s", k, v))
 	}
 

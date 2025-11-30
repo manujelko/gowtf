@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,13 @@ import (
 	"github.com/manujelko/gowtf/internal/models"
 )
 
+// testLogger returns a logger for testing
+func testLogger(t *testing.T) *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelError, // Only log errors in tests
+	}))
+}
+
 func TestNewWorkerPool(t *testing.T) {
 	outputDir, err := os.MkdirTemp("", "gowtf-test-*")
 	if err != nil {
@@ -19,7 +27,7 @@ func TestNewWorkerPool(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(5, outputDir)
+	pool, err := NewWorkerPool(5, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -44,19 +52,19 @@ func TestNewWorkerPool_InvalidSize(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	_, err = NewWorkerPool(0, outputDir)
+	_, err = NewWorkerPool(0, outputDir, testLogger(t))
 	if err == nil {
 		t.Fatal("Expected error for size 0")
 	}
 
-	_, err = NewWorkerPool(-1, outputDir)
+	_, err = NewWorkerPool(-1, outputDir, testLogger(t))
 	if err == nil {
 		t.Fatal("Expected error for negative size")
 	}
 }
 
 func TestNewWorkerPool_EmptyOutputDir(t *testing.T) {
-	_, err := NewWorkerPool(5, "")
+	_, err := NewWorkerPool(5, "", testLogger(t))
 	if err == nil {
 		t.Fatal("Expected error for empty output dir")
 	}
@@ -69,7 +77,7 @@ func TestWorkerPool_StartStop(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(3, outputDir)
+	pool, err := NewWorkerPool(3, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -99,7 +107,7 @@ func TestWorkerPool_ExecuteTask(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -130,6 +138,7 @@ func TestWorkerPool_ExecuteTask(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",
@@ -200,7 +209,7 @@ func TestWorkerPool_ExecuteTaskWithFailure(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -230,6 +239,7 @@ func TestWorkerPool_ExecuteTaskWithFailure(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",
@@ -264,7 +274,7 @@ func TestWorkerPool_ExecuteTaskWithTimeout(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -295,6 +305,7 @@ func TestWorkerPool_ExecuteTaskWithTimeout(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",
@@ -328,7 +339,7 @@ func TestWorkerPool_ConcurrentExecution(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(3, outputDir)
+	pool, err := NewWorkerPool(3, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -360,6 +371,7 @@ func TestWorkerPool_ConcurrentExecution(t *testing.T) {
 		}
 
 		job := TaskJob{
+			WorkflowEnv:  make(map[string]string),
 			TaskInstance: taskInstance,
 			Task:         task,
 			Context:      ctx,
@@ -405,7 +417,7 @@ func TestWorkerPool_EnvironmentVariables(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -437,6 +449,7 @@ func TestWorkerPool_EnvironmentVariables(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",
@@ -469,6 +482,155 @@ func TestWorkerPool_EnvironmentVariables(t *testing.T) {
 	}
 }
 
+func TestWorkerPool_EnvironmentVariableResolution(t *testing.T) {
+	outputDir, err := os.MkdirTemp("", "gowtf-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
+	if err != nil {
+		t.Fatalf("NewWorkerPool failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pool.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer pool.Stop()
+
+	// Set environment variable for resolution
+	os.Setenv("TEST_ENV_VAR", "resolved-value")
+	defer os.Unsetenv("TEST_ENV_VAR")
+
+	taskInstance := &models.TaskInstance{
+		ID:            1,
+		WorkflowRunID: 100,
+		TaskID:        10,
+		State:         models.TaskStateRunning,
+		Attempt:       1,
+	}
+
+	task := &models.WorkflowTask{
+		ID:     10,
+		Name:   "test-task",
+		Script: "echo $RESOLVED_VAR",
+		Env: map[string]string{
+			"RESOLVED_VAR": "$TEST_ENV_VAR",
+		},
+	}
+
+	now := time.Now()
+	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
+		TaskInstance: taskInstance,
+		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
+		Context:      ctx,
+	}
+
+	if err := pool.Submit(job); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	select {
+	case result := <-pool.Results():
+		if result.Error != nil {
+			t.Fatalf("Task execution failed: %v", result.Error)
+		}
+
+		stdoutContent, err := os.ReadFile(result.StdoutPath)
+		if err != nil {
+			t.Fatalf("Failed to read stdout file: %v", err)
+		}
+
+		expectedOutput := "resolved-value\n"
+		if string(stdoutContent) != expectedOutput {
+			t.Errorf("Expected stdout %q, got %q", expectedOutput, string(stdoutContent))
+		}
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for task result")
+	}
+}
+
+func TestWorkerPool_EnvironmentVariableWithDefault(t *testing.T) {
+	outputDir, err := os.MkdirTemp("", "gowtf-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
+	if err != nil {
+		t.Fatalf("NewWorkerPool failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pool.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer pool.Stop()
+
+	// Don't set the environment variable - should use default
+	taskInstance := &models.TaskInstance{
+		ID:            1,
+		WorkflowRunID: 100,
+		TaskID:        10,
+		State:         models.TaskStateRunning,
+		Attempt:       1,
+	}
+
+	task := &models.WorkflowTask{
+		ID:     10,
+		Name:   "test-task",
+		Script: "echo $VAR_WITH_DEFAULT",
+		Env: map[string]string{
+			"VAR_WITH_DEFAULT": "$MISSING_VAR:default-value",
+		},
+	}
+
+	now := time.Now()
+	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
+		TaskInstance: taskInstance,
+		Task:         task,
+		WorkflowName: "test-workflow",
+		RunStartedAt: now,
+		Context:      ctx,
+	}
+
+	if err := pool.Submit(job); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	select {
+	case result := <-pool.Results():
+		if result.Error != nil {
+			t.Fatalf("Task execution failed: %v", result.Error)
+		}
+
+		stdoutContent, err := os.ReadFile(result.StdoutPath)
+		if err != nil {
+			t.Fatalf("Failed to read stdout file: %v", err)
+		}
+
+		expectedOutput := "default-value\n"
+		if string(stdoutContent) != expectedOutput {
+			t.Errorf("Expected stdout %q, got %q", expectedOutput, string(stdoutContent))
+		}
+
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for task result")
+	}
+}
+
 func TestWorkerPool_OutputFileStructure(t *testing.T) {
 	outputDir, err := os.MkdirTemp("", "gowtf-test-*")
 	if err != nil {
@@ -476,7 +638,7 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -511,6 +673,7 @@ func TestWorkerPool_OutputFileStructure(t *testing.T) {
 	}
 
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: workflowName,
@@ -554,7 +717,7 @@ func TestWorkerPool_SubmitBeforeStart(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -578,6 +741,7 @@ func TestWorkerPool_SubmitBeforeStart(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",
@@ -598,7 +762,7 @@ func TestWorkerPool_SubmitAfterStop(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -632,6 +796,7 @@ func TestWorkerPool_SubmitAfterStop(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",
@@ -653,7 +818,7 @@ func TestWorkerPool_HeartbeatSending(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -690,6 +855,7 @@ func TestWorkerPool_HeartbeatSending(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",
@@ -763,7 +929,7 @@ func TestWorkerPool_HeartbeatWithoutChannel(t *testing.T) {
 	}
 	defer os.RemoveAll(outputDir)
 
-	pool, err := NewWorkerPool(1, outputDir)
+	pool, err := NewWorkerPool(1, outputDir, testLogger(t))
 	if err != nil {
 		t.Fatalf("NewWorkerPool failed: %v", err)
 	}
@@ -794,6 +960,7 @@ func TestWorkerPool_HeartbeatWithoutChannel(t *testing.T) {
 
 	now := time.Now()
 	job := TaskJob{
+		WorkflowEnv:  make(map[string]string),
 		TaskInstance: taskInstance,
 		Task:         task,
 		WorkflowName: "test-workflow",

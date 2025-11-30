@@ -61,7 +61,7 @@ func NewExecutor(db *sql.DB, events <-chan scheduler.WorkflowRunEvent, poolSize 
 		return nil, fmt.Errorf("failed to create dependencies store: %w", err)
 	}
 
-	workerPool, err := worker.NewWorkerPool(poolSize, outputDir)
+	workerPool, err := worker.NewWorkerPool(poolSize, outputDir, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create worker pool: %w", err)
 	}
@@ -464,6 +464,7 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 				TaskInstance: ti,
 				Task:         task,
 				WorkflowName: workflow.Name,
+				WorkflowEnv:  workflow.Env, // Pass workflow-level env for merging
 				RunStartedAt: workflowRun.StartedAt,
 				OutputDir:    "", // Worker pool uses its own output directory
 				Context:      taskCtx,
