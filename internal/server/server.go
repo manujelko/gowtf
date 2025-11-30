@@ -46,6 +46,7 @@ type Server struct {
 	Scheduler     SchedulerInterface
 	OutputDir     string
 	APIKey        string
+	rateLimiter   *RateLimiter
 	logger        *slog.Logger
 	httpServer    *http.Server
 }
@@ -62,7 +63,7 @@ type SchedulerInterface interface {
 	TriggerWorkflow(ctx context.Context, workflowID int) (*models.WorkflowRun, error)
 }
 
-func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string, apiKey string, logger *slog.Logger) (*Server, error) {
+func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, outputDir string, apiKey string, requestsPerMinute int, logger *slog.Logger) (*Server, error) {
 	workflows, err := models.NewWorkflowStore(db)
 	if err != nil {
 		return nil, err
@@ -88,6 +89,11 @@ func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, out
 		return nil, err
 	}
 
+	var rateLimiter *RateLimiter
+	if requestsPerMinute > 0 {
+		rateLimiter = NewRateLimiter(requestsPerMinute, logger)
+	}
+
 	return &Server{
 		DB:            db,
 		Workflows:     workflows,
@@ -99,6 +105,7 @@ func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, out
 		Scheduler:     scheduler,
 		OutputDir:     outputDir,
 		APIKey:        apiKey,
+		rateLimiter:   rateLimiter,
 		logger:        logger,
 	}, nil
 }
@@ -122,9 +129,11 @@ func (s *Server) Routes() http.Handler {
 	// Apply middleware in order:
 	// 1. Request ID middleware (innermost)
 	// 2. Logging middleware
-	// 3. API key middleware (outermost)
+	// 3. Rate limit middleware
+	// 4. API key middleware (outermost)
 	handler := s.requestIDMiddleware(mux)
 	handler = s.logRequest(handler)
+	handler = s.rateLimitMiddleware(handler)
 	if s.APIKey != "" {
 		handler = s.apiKeyMiddleware(handler)
 	}

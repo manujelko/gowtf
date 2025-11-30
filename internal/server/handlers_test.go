@@ -22,7 +22,7 @@ func setupTestServer(t *testing.T) *Server {
 	t.Helper()
 
 	db := models.NewTestDB(t)
-	srv, err := New(db, nil, nil, "./output", "", slog.Default())
+	srv, err := New(db, nil, nil, "./output", "", 60, slog.Default())
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestHandleTriggerWorkflow_Success(t *testing.T) {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
 
-	srv, err := New(db, nil, sched, "./output", "", slog.Default())
+	srv, err := New(db, nil, sched, "./output", "", 60, slog.Default())
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestHandleTriggerWorkflow_NotFound(t *testing.T) {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
 
-	srv, err := New(db, nil, sched, "./output", "", slog.Default())
+	srv, err := New(db, nil, sched, "./output", "", 60, slog.Default())
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestHandleTriggerWorkflow_Disabled(t *testing.T) {
 		t.Fatalf("NewScheduler failed: %v", err)
 	}
 
-	srv, err := New(db, nil, sched, "./output", "", slog.Default())
+	srv, err := New(db, nil, sched, "./output", "", 60, slog.Default())
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
 	}

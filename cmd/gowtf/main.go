@@ -30,6 +30,7 @@ func main() {
 	workers := flag.Int("workers", 4, "Worker pool size")
 	httpAddr := flag.String("http-addr", ":8080", "HTTP server address")
 	apiKey := flag.String("api-key", "", "API key for protecting API endpoints (optional, but recommended for production)")
+	rateLimit := flag.Int("rate-limit", 60, "Rate limit for API endpoints (requests per minute, 0 disables rate limiting)")
 	retentionDays := flag.Int("retention-days", 30, "Number of days to retain workflow runs (0 disables cleanup)")
 	retentionKeepMin := flag.Int("retention-keep-min", 10, "Always keep at least N most recent runs per workflow")
 	flag.Parse()
@@ -136,8 +137,8 @@ func main() {
 	}
 
 	// Initialize web server
-	logger.Info("Initializing web server")
-	srv, err := server.New(db, w, s, *outputDir, *apiKey, logger)
+	logger.Info("Initializing web server", "rate_limit", *rateLimit)
+	srv, err := server.New(db, w, s, *outputDir, *apiKey, *rateLimit, logger)
 	if err != nil {
 		logger.Error("Failed to create server", "error", err)
 		os.Exit(1)
