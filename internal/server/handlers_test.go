@@ -225,3 +225,95 @@ func TestHandleTriggerWorkflow_WrongMethod(t *testing.T) {
 		t.Errorf("expected status 405, got %d. Body: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestHandleTriggerWorkflow_AuthenticationRequired(t *testing.T) {
+	db := models.NewTestDB(t)
+	watcherEvents := make(chan watcher.WorkflowEvent, 10)
+	notifyCh := make(chan scheduler.WorkflowRunEvent, 10)
+
+	sched, err := scheduler.NewScheduler(db, watcherEvents, notifyCh, slog.Default())
+	if err != nil {
+		t.Fatalf("NewScheduler failed: %v", err)
+	}
+
+	// Create server with API key required
+	apiKey := "test-api-key-123"
+	srv, err := New(db, nil, sched, "./output", apiKey, 60, slog.Default())
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+
+	// Create workflow
+	wfID := models.InsertTestWorkflow(t, db, "test-workflow")
+	models.InsertTestTask(t, db, wfID, "test-task")
+
+	t.Run("Request without API key is rejected", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/workflow/"+strconv.Itoa(wfID)+"/trigger", nil)
+		w := httptest.NewRecorder()
+
+		srv.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d. Body: %s", w.Code, w.Body.String())
+		}
+
+		if !strings.Contains(w.Body.String(), "Unauthorized") {
+			t.Errorf("expected 'Unauthorized' in response body, got: %s", w.Body.String())
+		}
+	})
+
+	t.Run("Request with wrong API key is rejected", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/workflow/"+strconv.Itoa(wfID)+"/trigger", nil)
+		req.Header.Set("X-API-Key", "wrong-key")
+		w := httptest.NewRecorder()
+
+		srv.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected status 401, got %d. Body: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("Request with correct API key in header succeeds", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/workflow/"+strconv.Itoa(wfID)+"/trigger", nil)
+		req.Header.Set("X-API-Key", apiKey)
+		w := httptest.NewRecorder()
+
+		srv.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+		}
+
+		// Verify response contains workflow_run_id
+		var response map[string]int
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if response["workflow_run_id"] == 0 {
+			t.Errorf("expected workflow_run_id in response, got %v", response)
+		}
+	})
+
+	t.Run("Request with correct API key in query parameter succeeds", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/api/workflow/"+strconv.Itoa(wfID)+"/trigger?api_key="+apiKey, nil)
+		w := httptest.NewRecorder()
+
+		srv.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+		}
+
+		// Verify response contains workflow_run_id
+		var response map[string]int
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if response["workflow_run_id"] == 0 {
+			t.Errorf("expected workflow_run_id in response, got %v", response)
+		}
+	})
+}
