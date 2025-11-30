@@ -296,6 +296,24 @@ func (wp *WorkerPool) executeTask(ctx context.Context, job TaskJob) TaskResult {
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 
+	// Log command execution for audit trail (before execution)
+	// Extract environment variable keys (not values) for security
+	envKeys := make([]string, 0, len(mergedEnv))
+	for k := range mergedEnv {
+		envKeys = append(envKeys, k)
+	}
+
+	startTime := time.Now()
+	wp.logger.Info("Executing command",
+		"workflow", job.WorkflowName,
+		"task", job.Task.Name,
+		"task_instance_id", job.TaskInstance.ID,
+		"script", job.Task.Script,
+		"start_time", startTime,
+		"env_keys", envKeys,
+		"timeout", timeout.String(),
+	)
+
 	// Execute command
 	err = cmd.Run()
 	if err != nil {

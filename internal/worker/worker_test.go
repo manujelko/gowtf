@@ -1,11 +1,13 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -983,5 +985,143 @@ func TestWorkerPool_HeartbeatWithoutChannel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Timeout waiting for task result")
+	}
+}
+
+// capturedLogger returns a logger that writes to a buffer for testing
+func capturedLogger() (*slog.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	return logger, &buf
+}
+
+func TestWorkerPool_CommandExecutionLogging(t *testing.T) {
+	outputDir, err := os.MkdirTemp("", "gowtf-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	// Create a logger that captures output
+	logger, logBuffer := capturedLogger()
+
+	pool, err := NewWorkerPool(1, outputDir, logger)
+	if err != nil {
+		t.Fatalf("NewWorkerPool failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := pool.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer pool.Stop()
+
+	taskInstance := &models.TaskInstance{
+		ID:            42,
+		WorkflowRunID: 100,
+		TaskID:        10,
+		State:         models.TaskStateRunning,
+		Attempt:       1,
+	}
+
+	testScript := "echo 'Hello, World!'"
+	task := &models.WorkflowTask{
+		ID:      10,
+		Name:    "test-task",
+		Script:  testScript,
+		Timeout: "5m",
+		Env: map[string]string{
+			"SECRET_KEY":   "secret-value",
+			"PUBLIC_TOKEN": "public-token",
+		},
+	}
+
+	workflowName := "test-workflow"
+	now := time.Now()
+	job := TaskJob{
+		WorkflowEnv: map[string]string{
+			"WORKFLOW_VAR": "workflow-value",
+		},
+		TaskInstance: taskInstance,
+		Task:         task,
+		WorkflowName: workflowName,
+		RunStartedAt: now,
+		Context:      ctx,
+	}
+
+	if err := pool.Submit(job); err != nil {
+		t.Fatalf("Submit failed: %v", err)
+	}
+
+	// Wait for task to complete
+	select {
+	case result := <-pool.Results():
+		if result.Error != nil {
+			t.Fatalf("Task execution failed: %v", result.Error)
+		}
+		if result.ExitCode != 0 {
+			t.Errorf("Expected exit code 0, got %d", result.ExitCode)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for task result")
+	}
+
+	// Verify logs were written
+	logOutput := logBuffer.String()
+	if logOutput == "" {
+		t.Fatal("Expected log output, but got empty string")
+	}
+
+	// Verify required fields are present in log
+	checks := []struct {
+		field string
+		value string
+	}{
+		{"workflow", workflowName},
+		{"task", task.Name},
+		{"task_instance_id", "42"},
+		{"script", testScript},
+		{"timeout", "5m"},
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(logOutput, check.field) {
+			t.Errorf("Log output missing field %q", check.field)
+		}
+		if !strings.Contains(logOutput, check.value) {
+			t.Errorf("Log output missing value %q for field %q", check.value, check.field)
+		}
+	}
+
+	// Verify environment variable VALUES are NOT logged (security)
+	secretValue := "secret-value"
+	publicTokenValue := "public-token"
+	workflowValue := "workflow-value"
+
+	if strings.Contains(logOutput, secretValue) {
+		t.Errorf("Log output contains secret value %q (security risk)", secretValue)
+	}
+	if strings.Contains(logOutput, publicTokenValue) {
+		t.Errorf("Log output contains env value %q (should not log env values)", publicTokenValue)
+	}
+	if strings.Contains(logOutput, workflowValue) {
+		t.Errorf("Log output contains workflow env value %q (should not log env values)", workflowValue)
+	}
+
+	// Verify environment variable KEYS are logged (for audit trail)
+	expectedKeys := []string{"SECRET_KEY", "PUBLIC_TOKEN", "WORKFLOW_VAR"}
+	for _, key := range expectedKeys {
+		if !strings.Contains(logOutput, key) {
+			t.Errorf("Log output missing env key %q (should log keys for audit trail)", key)
+		}
+	}
+
+	// Verify "Executing command" message is present
+	if !strings.Contains(logOutput, "Executing command") {
+		t.Error("Log output missing 'Executing command' message")
 	}
 }
