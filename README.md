@@ -179,7 +179,75 @@ tasks:
       echo "Merging results..."
 ```
 
-### Example 3: Conditional Execution
+### Example 3: Dynamic Branching
+
+Branching allows you to dynamically choose which path to take based on runtime conditions. Branching tasks output task names to stdout, and only those tasks (and their downstream dependencies) will execute.
+
+```yaml
+name: branching_workflow
+schedule: "0 * * * *"
+
+tasks:
+  - name: initialize
+    script: |
+      echo "Initializing workflow..."
+  
+  # Branching task: outputs which path to take
+  - name: make_decision
+    depends_on: [initialize]
+    branch: true  # Mark as branching task
+    script: |
+      echo "Making decision..."
+      # Output task names to stdout (one per line)
+      # Only tasks listed here will execute
+      if [ "$(date +%H)" -lt 12 ]; then
+        echo "morning_path_task1"
+      else
+        echo "afternoon_path_task1"
+      fi
+      # Task must exit with code 0 (success)
+      exit 0
+  
+  # Path A: Morning path
+  - name: morning_path_task1
+    depends_on: [make_decision]
+    script: |
+      echo "Executing morning path..."
+  
+  - name: morning_path_task2
+    depends_on: [morning_path_task1]
+    script: |
+      echo "Morning path complete"
+  
+  # Path B: Afternoon path
+  - name: afternoon_path_task1
+    depends_on: [make_decision]
+    script: |
+      echo "Executing afternoon path..."
+  
+  - name: afternoon_path_task2
+    depends_on: [afternoon_path_task1]
+    script: |
+      echo "Afternoon path complete"
+  
+  # Merge point: Run if either path completes
+  - name: finalize
+    depends_on: [morning_path_task2, afternoon_path_task2]
+    condition: any_upstream.success
+    script: |
+      echo "Workflow complete!"
+```
+
+**Key points about branching:**
+- Branching tasks **always succeed** (exit code 0) - branching is controlled by output, not exit code
+- Output task names to stdout, one per line
+- Tasks not in the output are automatically skipped (along with their entire downstream branch)
+- You can output multiple task names for parallel branches
+- Use trigger rules (conditions) on merge points to handle multiple branches
+
+### Example 4: Conditional Execution (Legacy)
+
+You can still use conditions based on task success/failure:
 
 ```yaml
 name: conditional_workflow
@@ -197,26 +265,26 @@ tasks:
         exit 1
       fi
   
-  - name: success_path
+  - name: approved_path
     depends_on: [check_status]
     condition: check_status.success
     script: |
-      echo "Taking success path..."
+      echo "Processing approved status..."
   
-  - name: failure_path
+  - name: rejected_path
     depends_on: [check_status]
     condition: check_status.failed
     script: |
-      echo "Taking failure path..."
+      echo "Processing rejected status..."
   
   - name: finalize
-    depends_on: [success_path, failure_path]
+    depends_on: [approved_path, rejected_path]
     condition: any_upstream.success
     script: |
       echo "Finalizing workflow..."
 ```
 
-### Example 4: Task with Retries
+### Example 5: Task with Retries
 
 ```yaml
 name: retry_demo
@@ -244,7 +312,7 @@ tasks:
       echo "Continuing after unreliable task completed..."
 ```
 
-### Example 5: Manual-Only Workflow
+### Example 6: Manual-Only Workflow
 
 ```yaml
 name: manual_backup
@@ -263,7 +331,7 @@ tasks:
       # Your verification logic
 ```
 
-### Example 6: Environment Variables
+### Example 7: Environment Variables
 
 ```yaml
 name: env_demo
@@ -391,9 +459,13 @@ Each task can have the following properties:
 ### Optional Fields
 
 - `depends_on`: List of task names that must complete before this task runs
-- `condition`: Condition to evaluate before running:
+- `branch`: Set to `true` to mark this as a branching task. Branching tasks output task names to stdout to determine which downstream tasks execute. Branching tasks cannot have conditions.
+- `condition`: Trigger rule to evaluate before running (also called "trigger rules"):
   - `all_upstream.success`: All dependencies succeeded
-  - `any_upstream.success`: At least one dependency succeeded
+  - `any_upstream.success`: At least one dependency succeeded (ignores skipped tasks)
+  - `all_done`: All dependencies are in terminal state (success, failed, or skipped)
+  - `none_failed`: No dependencies failed (success or skipped are OK)
+  - `all_success_or_skipped`: All dependencies either succeeded or were skipped
   - `any_upstream.failed`: At least one dependency failed
   - `task_name.success`: Specific task succeeded
   - `task_name.failed`: Specific task failed
@@ -512,11 +584,68 @@ curl "http://localhost:8080/api/workflow/1/trigger?api_key=your-api-key"
 
 If the API key is missing or incorrect, the server returns `401 Unauthorized`. Static files and HTML pages remain accessible without authentication.
 
+## Branching
+
+gowtf supports dynamic branching where branching tasks output task names to stdout to dynamically determine which path to execute.
+
+### How Branching Works
+
+1. **Mark a task as branching**: Set `branch: true` on the task
+2. **Output task names**: The branching task outputs task names to stdout (one per line)
+3. **Automatic skipping**: Tasks not listed in the output are automatically skipped, along with their entire downstream branch
+4. **Merge points**: Use trigger rules (conditions) like `any_upstream.success` to merge branches
+
+### Branching Example
+
+```yaml
+tasks:
+  - name: decide_path
+    branch: true
+    script: |
+      # Output task names to determine which path to take
+      echo "path_a_task1"
+      # Task must succeed (exit 0)
+      exit 0
+  
+  - name: path_a_task1
+    depends_on: [decide_path]
+    script: echo "Path A"
+  
+  - name: path_b_task1
+    depends_on: [decide_path]
+    script: echo "Path B"  # This will be skipped
+  
+  - name: merge
+    depends_on: [path_a_task1, path_b_task1]
+    condition: any_upstream.success
+    script: echo "Merged"
+```
+
+### Multiple Branches
+
+You can output multiple task names for parallel execution:
+
+```yaml
+- name: branch_task
+  branch: true
+  script: |
+    echo -e "task_a\ntask_b\ntask_c"
+    exit 0
+```
+
+### Important Notes
+
+- Branching tasks **must succeed** (exit code 0) - failures are real failures, not branches
+- Tasks not in the branching output are skipped along with their entire downstream branch
+- Use trigger rules on merge points to handle multiple branches
+- Branching tasks cannot have conditions
+
 ## Features
 
 - ✅ **Workflow Orchestration**: Define complex workflows with task dependencies
 - ✅ **Cron Scheduling**: Schedule workflows using standard cron expressions
-- ✅ **Conditional Execution**: Run tasks based on upstream task outcomes
+- ✅ **Branching**: Dynamic branching based on runtime decisions
+- ✅ **Conditional Execution**: Run tasks based on upstream task outcomes using trigger rules
 - ✅ **Retry Logic**: Automatic retries with configurable delays
 - ✅ **Timeout Support**: Set timeouts for individual tasks
 - ✅ **Parallel Execution**: Run independent tasks concurrently

@@ -1,5 +1,5 @@
 INSERT INTO workflow_tasks (
-    workflow_id, name, script, retries, retry_delay, timeout, condition, env
+    workflow_id, name, script, retries, retry_delay, timeout, condition, env, branch
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 

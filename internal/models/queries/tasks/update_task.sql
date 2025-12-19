@@ -1,3 +1,3 @@
 UPDATE workflow_tasks
-SET name = ?, script = ?, retries = ?, retry_delay = ?, timeout = ?, condition = ?, env = ?
+SET name = ?, script = ?, retries = ?, retry_delay = ?, timeout = ?, condition = ?, env = ?, branch = ?
 WHERE id = ?;

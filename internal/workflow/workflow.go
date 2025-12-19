@@ -23,6 +23,7 @@ type Task struct {
 	Retries    int               `yaml:"retries,omitempty"`
 	RetryDelay string            `yaml:"retry_delay,omitempty"`
 	Timeout    string            `yaml:"timeout,omitempty"`
+	Branch     bool              `yaml:"branch,omitempty"`
 }
 
 func Load(path string) (*Workflow, error) {

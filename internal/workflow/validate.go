@@ -51,6 +51,11 @@ func validateTasks(tasks []Task) error {
 			errs = append(errs, fmt.Sprintf("task %q: missing script", t.Name))
 		}
 
+		// Branching tasks cannot have conditions
+		if t.Branch && t.Condition != "" {
+			errs = append(errs, fmt.Sprintf("task %q: branching tasks cannot have conditions", t.Name))
+		}
+
 		// Duplicate detection
 		if _, exists := taskNames[t.Name]; exists {
 			errs = append(errs, fmt.Sprintf("duplicate task name %q", t.Name))

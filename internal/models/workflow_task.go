@@ -19,6 +19,7 @@ type WorkflowTask struct {
 	Timeout    string
 	Condition  string
 	Env        map[string]string
+	Branch     bool
 }
 
 type WorkflowTaskStore struct {
@@ -74,6 +75,10 @@ func (s *WorkflowTaskStore) Insert(ctx context.Context, t *WorkflowTask) error {
 		return err
 	}
 
+	branch := 0
+	if t.Branch {
+		branch = 1
+	}
 	res, err := s.DB.ExecContext(ctx, s.insertQ,
 		t.WorkflowID,
 		t.Name,
@@ -83,6 +88,7 @@ func (s *WorkflowTaskStore) Insert(ctx context.Context, t *WorkflowTask) error {
 		t.Timeout,
 		t.Condition,
 		envJSON,
+		branch,
 	)
 	if err != nil {
 		return err
@@ -112,6 +118,7 @@ func (s *WorkflowTaskStore) GetForWorkflow(ctx context.Context, workflowID int) 
 			timeout    sql.NullString
 			condition  sql.NullString
 			envJSON    sql.NullString
+			branch     int
 		)
 
 		err := rows.Scan(
@@ -124,6 +131,7 @@ func (s *WorkflowTaskStore) GetForWorkflow(ctx context.Context, workflowID int) 
 			&timeout,
 			&condition,
 			&envJSON,
+			&branch,
 		)
 		if err != nil {
 			return nil, err
@@ -138,6 +146,8 @@ func (s *WorkflowTaskStore) GetForWorkflow(ctx context.Context, workflowID int) 
 		if condition.Valid {
 			t.Condition = condition.String
 		}
+
+		t.Branch = branch != 0
 
 		t.Env, err = decodeEnv(envJSON)
 		if err != nil {
@@ -157,6 +167,7 @@ func (s *WorkflowTaskStore) GetByNameForWorkflow(ctx context.Context, workflowID
 		timeout    sql.NullString
 		condition  sql.NullString
 		envJSON    sql.NullString
+		branch     int
 	)
 
 	err := s.DB.QueryRowContext(ctx, s.getByNameForWfQ, workflowID, taskName).Scan(
@@ -169,6 +180,7 @@ func (s *WorkflowTaskStore) GetByNameForWorkflow(ctx context.Context, workflowID
 		&timeout,
 		&condition,
 		&envJSON,
+		&branch,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -187,6 +199,8 @@ func (s *WorkflowTaskStore) GetByNameForWorkflow(ctx context.Context, workflowID
 		t.Condition = condition.String
 	}
 
+	t.Branch = branch != 0
+
 	t.Env, err = decodeEnv(envJSON)
 	if err != nil {
 		return nil, err
@@ -201,6 +215,11 @@ func (s *WorkflowTaskStore) Update(ctx context.Context, t *WorkflowTask) error {
 		return err
 	}
 
+	branch := 0
+	if t.Branch {
+		branch = 1
+	}
+
 	_, err = s.DB.ExecContext(ctx, s.updateQ,
 		t.Name,
 		t.Script,
@@ -209,6 +228,7 @@ func (s *WorkflowTaskStore) Update(ctx context.Context, t *WorkflowTask) error {
 		t.Timeout,
 		t.Condition,
 		envJSON,
+		branch,
 		t.ID,
 	)
 	return err
@@ -231,6 +251,10 @@ func (s *WorkflowTaskStore) InsertTx(ctx context.Context, tx *sql.Tx, t *Workflo
 		return err
 	}
 
+	branch := 0
+	if t.Branch {
+		branch = 1
+	}
 	res, err := tx.ExecContext(ctx, s.insertQ,
 		t.WorkflowID,
 		t.Name,
@@ -240,6 +264,7 @@ func (s *WorkflowTaskStore) InsertTx(ctx context.Context, tx *sql.Tx, t *Workflo
 		t.Timeout,
 		t.Condition,
 		envJSON,
+		branch,
 	)
 	if err != nil {
 		return err

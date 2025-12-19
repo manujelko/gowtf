@@ -69,8 +69,8 @@ func InsertTestTask(t *testing.T, db *sql.DB, workflowID int, name string) int {
 	t.Helper()
 
 	res, err := db.Exec(`
-		INSERT INTO workflow_tasks (workflow_id, name, script, retries, retry_delay, timeout, condition, env)
-		VALUES (?, ?, 'echo hi', 0, NULL, NULL, NULL, NULL);
+		INSERT INTO workflow_tasks (workflow_id, name, script, retries, retry_delay, timeout, condition, env, branch)
+		VALUES (?, ?, 'echo hi', 0, NULL, NULL, NULL, NULL, 0);
 	`, workflowID, name)
 	if err != nil {
 		t.Fatalf("insertTestTask failed: %v", err)

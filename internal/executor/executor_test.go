@@ -1040,9 +1040,9 @@ func TestExecutor_TaskRetryLogic(t *testing.T) {
 
 		// Verify retry instance state
 		// It could be pending, running, or already failed if executor is fast
-		if retryInstance.State != models.TaskStatePending && 
-		   retryInstance.State != models.TaskStateRunning && 
-		   retryInstance.State != models.TaskStateFailed {
+		if retryInstance.State != models.TaskStatePending &&
+			retryInstance.State != models.TaskStateRunning &&
+			retryInstance.State != models.TaskStateFailed {
 			t.Fatalf("expected retry instance to be pending, running or failed, got %v", retryInstance.State)
 		}
 
@@ -1612,4 +1612,525 @@ func TestExecutor_RetryLogic_Integration(t *testing.T) {
 			t.Fatalf("expected workflow run to fail after max retries exhausted, got %v", run.Status)
 		}
 	})
+}
+
+func TestExecutor_Branching_BasicBranching(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with branching: branch_task -> task_a, task_b
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+
+	taskStore, err := models.NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+
+	// Create branching task
+	branchTask := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "branch_task",
+		Script:     "echo task_a", // Output task_a to stdout
+		Retries:    0,
+		Branch:     true,
+	}
+	if err := taskStore.Insert(ctx, branchTask); err != nil {
+		t.Fatalf("Insert branch_task failed: %v", err)
+	}
+
+	// Create task_a (should run)
+	taskA := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "task_a",
+		Script:     "echo 'task_a executed'",
+		Retries:    0,
+	}
+	if err := taskStore.Insert(ctx, taskA); err != nil {
+		t.Fatalf("Insert task_a failed: %v", err)
+	}
+
+	// Create task_b (should be skipped)
+	taskB := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "task_b",
+		Script:     "echo 'task_b executed'",
+		Retries:    0,
+	}
+	if err := taskStore.Insert(ctx, taskB); err != nil {
+		t.Fatalf("Insert task_b failed: %v", err)
+	}
+
+	// Create dependencies
+	depsStore, err := models.NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, taskA.ID, branchTask.ID); err != nil {
+		t.Fatalf("Insert dependency task_a -> branch_task failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, taskB.ID, branchTask.ID); err != nil {
+		t.Fatalf("Insert dependency task_b -> branch_task failed: %v", err)
+	}
+
+	// Create workflow run
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instances
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	for _, taskID := range []int{branchTask.ID, taskA.ID, taskB.ID} {
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        taskID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(2 * time.Second)
+
+	// Verify results
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	var branchInstance, taskAInstance, taskBInstance *models.TaskInstance
+	for _, ti := range instances {
+		switch ti.TaskID {
+		case branchTask.ID:
+			branchInstance = ti
+		case taskA.ID:
+			taskAInstance = ti
+		case taskB.ID:
+			taskBInstance = ti
+		}
+	}
+
+	if branchInstance == nil || taskAInstance == nil || taskBInstance == nil {
+		t.Fatalf("missing task instances")
+	}
+
+	// Branching task should succeed
+	if branchInstance.State != models.TaskStateSuccess {
+		t.Fatalf("expected branch_task to succeed, got %v", branchInstance.State)
+	}
+
+	// task_a should run (in branching output)
+	if taskAInstance.State == models.TaskStateSkipped {
+		t.Fatalf("task_a should not be skipped (it's in branching output)")
+	}
+
+	// task_b should be skipped (not in branching output)
+	if taskBInstance.State != models.TaskStateSkipped {
+		t.Fatalf("task_b should be skipped (not in branching output), got %v", taskBInstance.State)
+	}
+}
+
+func TestExecutor_Branching_MultipleBranches(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with branching: branch_task -> task_a, task_b, task_c
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+
+	taskStore, err := models.NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+
+	// Create branching task that outputs multiple task names
+	branchTask := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "branch_task",
+		Script:     "printf 'task_a\ntask_c\n'", // Output task_a and task_c
+		Retries:    0,
+		Branch:     true,
+	}
+	if err := taskStore.Insert(ctx, branchTask); err != nil {
+		t.Fatalf("Insert branch_task failed: %v", err)
+	}
+
+	// Create tasks
+	tasks := []*models.WorkflowTask{
+		{WorkflowID: wfID, Name: "task_a", Script: "echo 'task_a'", Retries: 0},
+		{WorkflowID: wfID, Name: "task_b", Script: "echo 'task_b'", Retries: 0},
+		{WorkflowID: wfID, Name: "task_c", Script: "echo 'task_c'", Retries: 0},
+	}
+
+	for _, task := range tasks {
+		if err := taskStore.Insert(ctx, task); err != nil {
+			t.Fatalf("Insert task failed: %v", err)
+		}
+	}
+
+	// Create dependencies
+	depsStore, err := models.NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+
+	for _, task := range tasks {
+		if err := depsStore.Insert(ctx, task.ID, branchTask.ID); err != nil {
+			t.Fatalf("Insert dependency failed: %v", err)
+		}
+	}
+
+	// Create workflow run
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instances
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	allTaskIDs := []int{branchTask.ID}
+	for _, task := range tasks {
+		allTaskIDs = append(allTaskIDs, task.ID)
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        task.ID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+	}
+
+	// Create branch task instance
+	branchTI := &models.TaskInstance{
+		WorkflowRunID: wfRunID,
+		TaskID:        branchTask.ID,
+		State:         models.TaskStatePending,
+		Attempt:       1,
+	}
+	if err := taskInstanceStore.Insert(ctx, branchTI); err != nil {
+		t.Fatalf("Insert branch task instance failed: %v", err)
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(2 * time.Second)
+
+	// Verify results
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	instanceMap := make(map[int]*models.TaskInstance)
+	for _, ti := range instances {
+		instanceMap[ti.TaskID] = ti
+	}
+
+	// task_a should run
+	if instanceMap[tasks[0].ID].State == models.TaskStateSkipped {
+		t.Fatalf("task_a should not be skipped")
+	}
+
+	// task_b should be skipped
+	if instanceMap[tasks[1].ID].State != models.TaskStateSkipped {
+		t.Fatalf("task_b should be skipped, got %v", instanceMap[tasks[1].ID].State)
+	}
+
+	// task_c should run
+	if instanceMap[tasks[2].ID].State == models.TaskStateSkipped {
+		t.Fatalf("task_c should not be skipped")
+	}
+}
+
+func TestExecutor_Branching_EmptyOutput(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with branching that outputs nothing
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+
+	taskStore, err := models.NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+
+	// Create branching task with empty output
+	branchTask := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "branch_task",
+		Script:     "echo ''", // Empty output
+		Retries:    0,
+		Branch:     true,
+	}
+	if err := taskStore.Insert(ctx, branchTask); err != nil {
+		t.Fatalf("Insert branch_task failed: %v", err)
+	}
+
+	// Create downstream task
+	downstreamTask := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "downstream_task",
+		Script:     "echo 'should not run'",
+		Retries:    0,
+	}
+	if err := taskStore.Insert(ctx, downstreamTask); err != nil {
+		t.Fatalf("Insert downstream_task failed: %v", err)
+	}
+
+	// Create dependency
+	depsStore, err := models.NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, downstreamTask.ID, branchTask.ID); err != nil {
+		t.Fatalf("Insert dependency failed: %v", err)
+	}
+
+	// Create workflow run
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instances
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	for _, taskID := range []int{branchTask.ID, downstreamTask.ID} {
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        taskID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(2 * time.Second)
+
+	// Verify results
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	var downstreamInstance *models.TaskInstance
+	for _, ti := range instances {
+		if ti.TaskID == downstreamTask.ID {
+			downstreamInstance = ti
+			break
+		}
+	}
+
+	if downstreamInstance == nil {
+		t.Fatalf("downstream_task instance not found")
+	}
+
+	// Downstream task should be skipped (empty branching output)
+	if downstreamInstance.State != models.TaskStateSkipped {
+		t.Fatalf("downstream_task should be skipped (empty branching output), got %v", downstreamInstance.State)
+	}
+}
+
+func TestExecutor_Branching_InvalidTaskName(t *testing.T) {
+	db := models.NewTestDB(t)
+	events := make(chan scheduler.WorkflowRunEvent, 10)
+
+	outputDir, err := os.MkdirTemp("", "gowtf-test-output-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp output dir: %v", err)
+	}
+	defer os.RemoveAll(outputDir)
+
+	executor, err := NewExecutor(db, events, 5, outputDir, slog.Default())
+	if err != nil {
+		t.Fatalf("NewExecutor failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		_ = executor.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Create workflow with branching that outputs invalid task name
+	wfID := models.InsertTestWorkflow(t, db, "test-wf")
+
+	taskStore, err := models.NewWorkflowTaskStore(db)
+	if err != nil {
+		t.Fatalf("NewWorkflowTaskStore failed: %v", err)
+	}
+
+	// Create branching task with invalid task name in output
+	branchTask := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "branch_task",
+		Script:     "echo 'nonexistent_task'", // Invalid task name
+		Retries:    0,
+		Branch:     true,
+	}
+	if err := taskStore.Insert(ctx, branchTask); err != nil {
+		t.Fatalf("Insert branch_task failed: %v", err)
+	}
+
+	// Create downstream task
+	downstreamTask := &models.WorkflowTask{
+		WorkflowID: wfID,
+		Name:       "downstream_task",
+		Script:     "echo 'should not run'",
+		Retries:    0,
+	}
+	if err := taskStore.Insert(ctx, downstreamTask); err != nil {
+		t.Fatalf("Insert downstream_task failed: %v", err)
+	}
+
+	// Create dependency
+	depsStore, err := models.NewTaskDependenciesStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskDependenciesStore failed: %v", err)
+	}
+	if err := depsStore.Insert(ctx, downstreamTask.ID, branchTask.ID); err != nil {
+		t.Fatalf("Insert dependency failed: %v", err)
+	}
+
+	// Create workflow run
+	wfRunID := models.InsertTestWorkflowRun(t, db, wfID)
+
+	// Create task instances
+	taskInstanceStore, err := models.NewTaskInstanceStore(db)
+	if err != nil {
+		t.Fatalf("NewTaskInstanceStore failed: %v", err)
+	}
+
+	for _, taskID := range []int{branchTask.ID, downstreamTask.ID} {
+		ti := &models.TaskInstance{
+			WorkflowRunID: wfRunID,
+			TaskID:        taskID,
+			State:         models.TaskStatePending,
+			Attempt:       1,
+		}
+		if err := taskInstanceStore.Insert(ctx, ti); err != nil {
+			t.Fatalf("Insert task instance failed: %v", err)
+		}
+	}
+
+	// Send event
+	events <- scheduler.WorkflowRunEvent{
+		WorkflowRunID: wfRunID,
+		WorkflowID:    wfID,
+	}
+
+	// Wait for processing
+	time.Sleep(2 * time.Second)
+
+	// Verify results
+	instances, err := taskInstanceStore.GetForRun(ctx, wfRunID)
+	if err != nil {
+		t.Fatalf("GetForRun failed: %v", err)
+	}
+
+	var downstreamInstance *models.TaskInstance
+	for _, ti := range instances {
+		if ti.TaskID == downstreamTask.ID {
+			downstreamInstance = ti
+			break
+		}
+	}
+
+	if downstreamInstance == nil {
+		t.Fatalf("downstream_task instance not found")
+	}
+
+	// Downstream task should be skipped (invalid task name in branching output)
+	if downstreamInstance.State != models.TaskStateSkipped {
+		t.Fatalf("downstream_task should be skipped (invalid task name in branching output), got %v", downstreamInstance.State)
+	}
 }

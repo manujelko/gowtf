@@ -231,6 +231,7 @@ func (w *Watcher) syncWorkflow(filePath string) error {
 			Timeout:    task.Timeout,
 			Condition:  task.Condition,
 			Env:        task.Env,
+			Branch:     task.Branch,
 		}
 
 		if err := w.taskStore.InsertTx(w.ctx, tx, dbTask); err != nil {

@@ -465,7 +465,7 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 		state := "pending"
 		if instance != nil {
 			state = instance.State.String()
-			
+
 			// Handle retry states
 			// Show as "retrying" (orange) if it's a retry attempt (attempt > 1)
 			// This applies to both Pending (waiting to start) and Running (currently executing)
@@ -568,32 +568,32 @@ func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("format") == "json" {
 		// Return JSON with node data
 		w.Header().Set("Content-Type", "application/json")
-		
+
 		type NodeData struct {
 			State      string `json:"state"`
 			InstanceID *int   `json:"instance_id,omitempty"`
 			Attempts   []int  `json:"attempts,omitempty"`
 		}
-		
+
 		nodesData := make(map[int]NodeData)
 		for _, node := range nodes {
 			var instanceID *int
 			if node.Instance != nil {
 				instanceID = &node.Instance.ID
 			}
-			
+
 			var attempts []int
 			for _, attempt := range node.Attempts {
 				attempts = append(attempts, attempt.ID)
 			}
-			
+
 			nodesData[node.Task.ID] = NodeData{
 				State:      node.State,
 				InstanceID: instanceID,
 				Attempts:   attempts,
 			}
 		}
-		
+
 		jsonData := map[string]any{
 			"workflowRun": map[string]any{
 				"id":        workflowRun.ID,

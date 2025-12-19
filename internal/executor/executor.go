@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -262,78 +263,23 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 
 			if allComplete {
 				// Update workflow run status
-				// Strategy:
-				// 1. For each failed task, check if it's "handled" by having a downstream task with a condition checking for its failure
-				// 2. A workflow succeeds if all non-skipped, non-handled-failure tasks succeeded
-				// 3. If there's an unhandled failure, workflow fails
+				// Workflow succeeds if all non-skipped tasks succeeded
+				// OR if all failed tasks have their failures "handled" by downstream tasks
 
-				// Build task ID to task map
-				taskIDToTask := make(map[int]*models.WorkflowTask)
-				for _, task := range tasks {
-					taskIDToTask[task.ID] = task
-				}
-
-				// Build task name to task ID map for condition checking
-				taskNameToID := make(map[string]int)
-				for _, task := range tasks {
-					taskNameToID[task.Name] = task.ID
-				}
-
-				// Build set of handled failure task IDs
-				handledFailureTaskIDs := make(map[int]bool)
-				for _, ti := range taskInstances {
-					if ti.State == models.TaskStateFailed {
-						// Check if any downstream task has a condition checking for this task's failure
-						for _, downstreamTask := range tasks {
-							deps, err := e.depsStore.GetForTask(ctx, downstreamTask.ID)
-							if err != nil {
-								continue
-							}
-							// Check if this downstream task depends on the failed task
-							dependsOnFailed := false
-							for _, depID := range deps {
-								if depID == ti.TaskID {
-									dependsOnFailed = true
-									break
-								}
-							}
-							if dependsOnFailed {
-								// Check if the condition handles the failure
-								if downstreamTask.Condition != "" {
-									// Check if condition is "task_name.failed" or "any_upstream.failed"
-									if downstreamTask.Condition == "any_upstream.failed" {
-										handledFailureTaskIDs[ti.TaskID] = true
-										break
-									}
-									parts := strings.Split(downstreamTask.Condition, ".")
-									if len(parts) == 2 && parts[1] == "failed" {
-										// Check if it's checking for this specific task's failure
-										if taskNameToID[parts[0]] == ti.TaskID {
-											handledFailureTaskIDs[ti.TaskID] = true
-											break
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
-				// Check if all non-skipped, non-handled-failure tasks succeeded
+				// Check if all non-skipped tasks succeeded
 				allSuccess := true
+				var failedTasks []*models.TaskInstance
 				for _, ti := range taskInstances {
 					// Skip tasks that were skipped - they don't affect workflow status
 					if ti.State == models.TaskStateSkipped {
 						continue
 					}
-					// Skip handled failures - they're part of intentional branching
-					if ti.State == models.TaskStateFailed && handledFailureTaskIDs[ti.TaskID] {
-						continue
-					}
-					// If a task ran but didn't succeed (and it's not a handled failure), workflow fails
+					// If a task ran but didn't succeed, check if failure is handled
 					if ti.State != models.TaskStateSuccess {
 						allSuccess = false
-						break
+						if ti.State == models.TaskStateFailed {
+							failedTasks = append(failedTasks, ti)
+						}
 					}
 				}
 
@@ -342,7 +288,34 @@ func (e *Executor) processWorkflowRun(ctx context.Context, workflowRunID, workfl
 				if allSuccess {
 					status = models.RunSuccess
 				} else {
-					status = models.RunFailed
+					// Check if all failed tasks have their failures "handled"
+					allFailuresHandled := true
+					for _, failedTask := range failedTasks {
+						// Find the task configuration
+						var task *models.WorkflowTask
+						for _, t := range tasks {
+							if t.ID == failedTask.TaskID {
+								task = t
+								break
+							}
+						}
+						if task == nil {
+							allFailuresHandled = false
+							break
+						}
+
+						// Check if this failure is handled by a downstream task
+						if !e.isFailureHandled(ctx, task, failedTask, taskInstances, tasks, tasksByName) {
+							allFailuresHandled = false
+							break
+						}
+					}
+
+					if allFailuresHandled {
+						status = models.RunSuccess
+					} else {
+						status = models.RunFailed
+					}
 				}
 
 				if err := e.workflowRunStore.UpdateStatus(ctx, workflowRunID, status, &finishedAt); err != nil {
@@ -534,11 +507,23 @@ func (e *Executor) getReadyTasks(ctx context.Context, taskInstances []*models.Ta
 		taskMap[task.ID] = task
 	}
 
+	// Build a map of task name -> task for branching output lookup
+	taskNameToTask := make(map[string]*models.WorkflowTask)
+	for _, task := range tasks {
+		taskNameToTask[task.Name] = task
+	}
+
 	var ready []*models.TaskInstance
 
 	for _, ti := range taskInstances {
 		// Skip tasks that are not pending
 		if ti.State != models.TaskStatePending {
+			continue
+		}
+
+		// Get the task configuration
+		task, exists := taskMap[ti.TaskID]
+		if !exists {
 			continue
 		}
 
@@ -548,8 +533,10 @@ func (e *Executor) getReadyTasks(ctx context.Context, taskInstances []*models.Ta
 			return nil, fmt.Errorf("failed to get dependencies for task %d: %w", ti.TaskID, err)
 		}
 
-		// Check if all dependencies are satisfied
+		// Check if all dependencies are satisfied and handle branching
 		allSatisfied := true
+		shouldSkip := false
+
 		for _, depTaskID := range deps {
 			depInstance, exists := instanceMap[depTaskID]
 			if !exists {
@@ -563,9 +550,104 @@ func (e *Executor) getReadyTasks(ctx context.Context, taskInstances []*models.Ta
 				allSatisfied = false
 				break
 			}
+
+			// Check if this dependency is a branching task
+			depTask, exists := taskMap[depTaskID]
+			if exists && depTask.Branch {
+				// Branching task must have succeeded for branching to work
+				if depInstance.State == models.TaskStateSuccess {
+					// Get the branching output
+					branchingOutput, err := e.getBranchingOutput(ctx, depInstance)
+					if err != nil {
+						e.logger.Warn("Failed to get branching output, skipping downstream task",
+							"branching_task_id", depTaskID,
+							"downstream_task_id", ti.TaskID,
+							"error", err)
+						shouldSkip = true
+						break
+					}
+
+					// Check if this task's name is in the branching output
+					found := false
+					for _, outputTaskName := range branchingOutput {
+						if outputTaskName == task.Name {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						// Task not in branching output, skip it (and all its downstream tasks)
+						shouldSkip = true
+						break
+					}
+				} else if depInstance.State == models.TaskStateFailed {
+					// Branching task failed - skip all downstream tasks
+					// A failed branching task means we can't determine which path to take
+					e.logger.Warn("Branching task failed, skipping all downstream tasks",
+						"branching_task_id", depTaskID,
+						"downstream_task_id", ti.TaskID,
+						"task_name", task.Name)
+					shouldSkip = true
+					break
+				}
+			}
 		}
 
+		// If task should be skipped due to branching, skip it immediately
+		// This ensures entire branches are skipped
+		if shouldSkip {
+			// Mark task as skipped
+			if err := e.markTaskSkipped(ctx, ti); err != nil {
+				e.logger.Error("Failed to mark task as skipped",
+					"task_id", ti.TaskID,
+					"task_instance_id", ti.ID,
+					"error", err)
+			} else {
+				e.logger.Info("Task skipped due to branching",
+					"task_id", ti.TaskID,
+					"task_instance_id", ti.ID,
+					"task_name", task.Name)
+			}
+			continue
+		}
+
+		// If all dependencies are satisfied, check if we need to skip
 		if allSatisfied {
+			// Check if all dependencies are skipped (entire branch was skipped)
+			// Only skip if ALL are skipped AND task has no condition
+			// Conditions like "any_upstream.success" can handle mixed skipped/succeeded dependencies
+			allSkipped := len(deps) > 0
+			for _, depTaskID := range deps {
+				depInstance, exists := instanceMap[depTaskID]
+				if !exists {
+					allSkipped = false
+					break
+				}
+				if depInstance.State != models.TaskStateSkipped {
+					allSkipped = false
+					break
+				}
+			}
+
+			// If all dependencies are skipped and task has no condition, skip it
+			// This ensures entire branches are skipped (not just individual nodes)
+			if allSkipped && task.Condition == "" {
+				if err := e.markTaskSkipped(ctx, ti); err != nil {
+					e.logger.Error("Failed to mark task as skipped",
+						"task_id", ti.TaskID,
+						"task_instance_id", ti.ID,
+						"error", err)
+				} else {
+					e.logger.Info("Task skipped - all dependencies were skipped",
+						"task_id", ti.TaskID,
+						"task_instance_id", ti.ID,
+						"task_name", task.Name)
+				}
+				continue
+			}
+
+			// Task is ready - condition evaluation will happen later
 			ready = append(ready, ti)
 		}
 	}
@@ -587,19 +669,23 @@ func (e *Executor) evaluateCondition(ctx context.Context, condition string, task
 	}
 
 	// Parse condition
-	// Conditions can be:
+	// Trigger rules (conditions) can be:
 	// - "all_upstream.success" - all dependency tasks succeeded
+	// - "any_upstream.success" - at least one dependency task succeeded (ignores skipped)
+	// - "all_done" - all dependency tasks are in terminal state (success, failed, or skipped)
+	// - "none_failed" - no dependency tasks failed (success or skipped are OK)
+	// - "all_success_or_skipped" - all dependency tasks either succeeded or were skipped
 	// - "any_upstream.failed" - any dependency task failed
 	// - "task_name.success" - specific task succeeded
 	// - "task_name.failed" - specific task failed
 
-	if condition == "all_upstream.success" {
-		// Get dependencies for this task
-		deps, err := e.depsStore.GetForTask(ctx, task.ID)
-		if err != nil {
-			return false, fmt.Errorf("failed to get dependencies: %w", err)
-		}
+	// Get dependencies for this task
+	deps, err := e.depsStore.GetForTask(ctx, task.ID)
+	if err != nil {
+		return false, fmt.Errorf("failed to get dependencies: %w", err)
+	}
 
+	if condition == "all_upstream.success" {
 		if len(deps) == 0 {
 			// No dependencies, condition is satisfied
 			return true, nil
@@ -618,13 +704,86 @@ func (e *Executor) evaluateCondition(ctx context.Context, condition string, task
 		return true, nil
 	}
 
-	if condition == "any_upstream.failed" {
-		// Get dependencies for this task
-		deps, err := e.depsStore.GetForTask(ctx, task.ID)
-		if err != nil {
-			return false, fmt.Errorf("failed to get dependencies: %w", err)
+	if condition == "any_upstream.success" {
+		if len(deps) == 0 {
+			// No dependencies, condition is not satisfied (can't have any success if no deps)
+			return false, nil
 		}
 
+		// At least one dependency must have succeeded (skipped tasks are ignored)
+		for _, depTaskID := range deps {
+			depInstance, exists := instanceMap[depTaskID]
+			if !exists {
+				return false, fmt.Errorf("dependency task instance %d not found", depTaskID)
+			}
+			if depInstance.State == models.TaskStateSuccess {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	if condition == "all_done" {
+		if len(deps) == 0 {
+			// No dependencies, condition is satisfied
+			return true, nil
+		}
+
+		// All dependencies must be in a terminal state (success, failed, or skipped)
+		for _, depTaskID := range deps {
+			depInstance, exists := instanceMap[depTaskID]
+			if !exists {
+				return false, fmt.Errorf("dependency task instance %d not found", depTaskID)
+			}
+			if depInstance.State != models.TaskStateSuccess &&
+				depInstance.State != models.TaskStateFailed &&
+				depInstance.State != models.TaskStateSkipped {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	if condition == "none_failed" {
+		if len(deps) == 0 {
+			// No dependencies, condition is satisfied
+			return true, nil
+		}
+
+		// No dependency should have failed (success or skipped are OK)
+		for _, depTaskID := range deps {
+			depInstance, exists := instanceMap[depTaskID]
+			if !exists {
+				return false, fmt.Errorf("dependency task instance %d not found", depTaskID)
+			}
+			if depInstance.State == models.TaskStateFailed {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	if condition == "all_success_or_skipped" {
+		if len(deps) == 0 {
+			// No dependencies, condition is satisfied
+			return true, nil
+		}
+
+		// All dependencies must have either succeeded or been skipped
+		for _, depTaskID := range deps {
+			depInstance, exists := instanceMap[depTaskID]
+			if !exists {
+				return false, fmt.Errorf("dependency task instance %d not found", depTaskID)
+			}
+			if depInstance.State != models.TaskStateSuccess &&
+				depInstance.State != models.TaskStateSkipped {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+
+	if condition == "any_upstream.failed" {
 		// At least one dependency must have failed
 		for _, depTaskID := range deps {
 			depInstance, exists := instanceMap[depTaskID]
@@ -632,31 +791,6 @@ func (e *Executor) evaluateCondition(ctx context.Context, condition string, task
 				return false, fmt.Errorf("dependency task instance %d not found", depTaskID)
 			}
 			if depInstance.State == models.TaskStateFailed {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-
-	if condition == "any_upstream.success" {
-		// Get dependencies for this task
-		deps, err := e.depsStore.GetForTask(ctx, task.ID)
-		if err != nil {
-			return false, fmt.Errorf("failed to get dependencies: %w", err)
-		}
-
-		if len(deps) == 0 {
-			// No dependencies, condition is not satisfied (can't have any success if no deps)
-			return false, nil
-		}
-
-		// At least one dependency must have succeeded
-		for _, depTaskID := range deps {
-			depInstance, exists := instanceMap[depTaskID]
-			if !exists {
-				return false, fmt.Errorf("dependency task instance %d not found", depTaskID)
-			}
-			if depInstance.State == models.TaskStateSuccess {
 				return true, nil
 			}
 		}
@@ -732,6 +866,110 @@ func (e *Executor) markTaskSkipped(ctx context.Context, taskInstance *models.Tas
 	taskInstance.State = models.TaskStateSkipped
 	taskInstance.FinishedAt = &now
 	return e.taskInstanceStore.Update(ctx, taskInstance)
+}
+
+// parseBranchingOutput reads and parses the stdout file from a branching task
+// Returns a list of task names (one per line, trimmed, empty lines ignored)
+func (e *Executor) parseBranchingOutput(stdoutPath string) ([]string, error) {
+	if stdoutPath == "" {
+		return nil, fmt.Errorf("stdout path is empty")
+	}
+
+	content, err := os.ReadFile(stdoutPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read stdout file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var taskNames []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			taskNames = append(taskNames, trimmed)
+		}
+	}
+
+	return taskNames, nil
+}
+
+// getBranchingOutput gets the list of task names from a branching task's output
+func (e *Executor) getBranchingOutput(ctx context.Context, taskInstance *models.TaskInstance) ([]string, error) {
+	if taskInstance.StdoutPath == nil || *taskInstance.StdoutPath == "" {
+		return nil, fmt.Errorf("task instance has no stdout path")
+	}
+
+	return e.parseBranchingOutput(*taskInstance.StdoutPath)
+}
+
+// isFailureHandled checks if a failed task's failure is "handled" by downstream tasks.
+// A failure is "handled" if there's a downstream task (direct or indirect) that:
+// 1. Has a condition like `task_name.failed` (where task_name is the failed task) and that task succeeded, OR
+// 2. Has a condition like `any_upstream.success` and that task succeeded (meaning at least one upstream succeeded, so the failure was handled by another path).
+func (e *Executor) isFailureHandled(ctx context.Context, failedTask *models.WorkflowTask, failedTaskInstance *models.TaskInstance, taskInstances []*models.TaskInstance, tasks []*models.WorkflowTask, tasksByName map[string]*models.WorkflowTask) bool {
+	// Build instance map for quick lookup
+	instanceMap := make(map[int]*models.TaskInstance)
+	for _, ti := range taskInstances {
+		instanceMap[ti.TaskID] = ti
+	}
+
+	// Find all tasks that depend on the failed task (downstream tasks)
+	var downstreamTasks []*models.WorkflowTask
+	for _, task := range tasks {
+		// Get dependencies for this task
+		deps, err := e.depsStore.GetForTask(ctx, task.ID)
+		if err != nil {
+			continue
+		}
+		// Check if this task depends on the failed task
+		for _, depTaskID := range deps {
+			if depTaskID == failedTask.ID {
+				downstreamTasks = append(downstreamTasks, task)
+				break
+			}
+		}
+	}
+
+	// Check if any downstream task handles the failure
+	for _, downstreamTask := range downstreamTasks {
+		downstreamInstance, exists := instanceMap[downstreamTask.ID]
+		if !exists {
+			continue
+		}
+
+		// Downstream task must have succeeded to handle the failure
+		if downstreamInstance.State != models.TaskStateSuccess {
+			continue
+		}
+
+		// Check if the downstream task's condition handles the failure
+		condition := downstreamTask.Condition
+
+		// Check for explicit failure handling: `task_name.failed`
+		if condition == failedTask.Name+".failed" {
+			return true
+		}
+
+		// Check for `any_upstream.success` - if this succeeded, it means at least one upstream succeeded,
+		// so the failure was handled by another path
+		if condition == "any_upstream.success" {
+			// Verify that at least one upstream (other than the failed task) succeeded
+			deps, err := e.depsStore.GetForTask(ctx, downstreamTask.ID)
+			if err != nil {
+				continue
+			}
+			for _, depTaskID := range deps {
+				if depTaskID == failedTask.ID {
+					continue // Skip the failed task
+				}
+				depInstance, exists := instanceMap[depTaskID]
+				if exists && depInstance.State == models.TaskStateSuccess {
+					return true // At least one other upstream succeeded, so failure is handled
+				}
+			}
+		}
+	}
+
+	return false
 }
 
 // handleResults processes results from the worker pool
