@@ -8,6 +8,9 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
+//go:embed static
+var staticFS embed.FS
+
 // initTemplates parses templates from the embedded filesystem
 // It returns a map where the key is the template name (e.g. "dashboard.html")
 // and the value is the complete template set for that page

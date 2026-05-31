@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -123,8 +124,8 @@ func New(db *sql.DB, watcher WatcherInterface, scheduler SchedulerInterface, out
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	fileServer := http.FileServer(http.Dir("./ui/static"))
-	mux.Handle("/static/", http.StripPrefix("/static", fileServer))
+	sub, _ := fs.Sub(staticFS, "static")
+	mux.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.FS(sub))))
 
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	mux.HandleFunc("GET /workflow/", s.handleWorkflowDetail)
