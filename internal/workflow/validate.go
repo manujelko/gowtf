@@ -65,12 +65,12 @@ func validateTasks(tasks []Task) error {
 
 	// Dependency and condition validation
 	validGlobalConditions := map[string]struct{}{
-		"all_upstream.success":    {},
-		"any_upstream.success":    {},
-		"all_done":                {},
-		"none_failed":             {},
-		"all_success_or_skipped":  {},
-		"any_upstream.failed":     {},
+		"all_upstream.success":   {},
+		"any_upstream.success":   {},
+		"all_done":               {},
+		"none_failed":            {},
+		"all_success_or_skipped": {},
+		"any_upstream.failed":    {},
 	}
 
 	for _, t := range tasks {
