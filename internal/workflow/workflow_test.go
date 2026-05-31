@@ -287,6 +287,28 @@ func TestValidation_InvalidSchedule(t *testing.T) {
 	}
 }
 
+func TestValidation_CronDescriptors(t *testing.T) {
+	valid := []string{
+		"@hourly", "@daily", "@midnight", "@weekly",
+		"@monthly", "@yearly", "@annually",
+		"@every 1h", "@every 30m", "@every 1h30m",
+	}
+	for _, s := range valid {
+		wf := &Workflow{Name: "test", Tasks: []Task{{Name: "t", Script: "echo hi"}}, Schedule: s}
+		if err := validateWorkflow(wf); err != nil {
+			t.Errorf("expected %q to be valid, got: %v", s, err)
+		}
+	}
+
+	invalid := []string{"@hourley", "@evry 1h", "@every notaduration", "@"}
+	for _, s := range invalid {
+		wf := &Workflow{Name: "test", Tasks: []Task{{Name: "t", Script: "echo hi"}}, Schedule: s}
+		if err := validateWorkflow(wf); err == nil {
+			t.Errorf("expected %q to be invalid but got no error", s)
+		}
+	}
+}
+
 func TestValidation_InvalidCondition(t *testing.T) {
 	_, err := Load("testdata/invalid_bad_condition.yaml")
 	if err == nil {

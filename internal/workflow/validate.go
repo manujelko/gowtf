@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 func validateWorkflow(wf *Workflow) error {
@@ -165,18 +166,41 @@ func detectCycles(tasks []Task) error {
 	return nil
 }
 
+var validDescriptors = map[string]struct{}{
+	"@yearly":   {},
+	"@annually": {},
+	"@monthly":  {},
+	"@weekly":   {},
+	"@daily":    {},
+	"@midnight": {},
+	"@hourly":   {},
+}
+
 func validateSchedule(schedule string) error {
-	// Cron format: 5 space-separated fields (minute hour day month weekday)
+	// Allow @descriptor and @every <duration> forms supported by robfig/cron.
+	if strings.HasPrefix(schedule, "@") {
+		if strings.HasPrefix(schedule, "@every ") {
+			d := strings.TrimPrefix(schedule, "@every ")
+			if _, err := time.ParseDuration(d); err != nil {
+				return fmt.Errorf("invalid @every duration %q: %v", d, err)
+			}
+			return nil
+		}
+		if _, ok := validDescriptors[schedule]; !ok {
+			return fmt.Errorf("unknown cron descriptor %q (valid: @hourly, @daily, @midnight, @weekly, @monthly, @yearly, @annually, @every <duration>)", schedule)
+		}
+		return nil
+	}
+
+	// Standard 5-field cron: minute hour day month weekday
 	fields := strings.Fields(schedule)
 	if len(fields) != 5 {
 		return fmt.Errorf("schedule must have exactly 5 space-separated fields (minute hour day month weekday), got %d", len(fields))
 	}
 
-	// Basic validation: each field should contain valid cron characters
-	// Valid characters: digits, *, -, /, , (comma)
 	cronFieldPattern := regexp.MustCompile(`^[\d\*\/\-,]+$`)
+	fieldNames := []string{"minute", "hour", "day", "month", "weekday"}
 	for i, field := range fields {
-		fieldNames := []string{"minute", "hour", "day", "month", "weekday"}
 		if !cronFieldPattern.MatchString(field) {
 			return fmt.Errorf("invalid %s field: %q (must contain only digits, *, -, /, or commas)", fieldNames[i], field)
 		}
