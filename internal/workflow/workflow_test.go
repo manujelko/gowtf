@@ -287,6 +287,26 @@ func TestValidation_InvalidSchedule(t *testing.T) {
 	}
 }
 
+func TestValidation_InvalidCondition(t *testing.T) {
+	_, err := Load("testdata/invalid_bad_condition.yaml")
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid condition") {
+		t.Fatalf("expected invalid condition error, got: %v", err)
+	}
+}
+
+func TestValidation_ConditionReferencesUnknownTask(t *testing.T) {
+	_, err := Load("testdata/invalid_condition_unknown_task.yaml")
+	if err == nil {
+		t.Fatal("expected validation error but got nil")
+	}
+	if !strings.Contains(err.Error(), "condition references unknown task") {
+		t.Fatalf("expected unknown task condition error, got: %v", err)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

@@ -63,15 +63,36 @@ func validateTasks(tasks []Task) error {
 		taskNames[t.Name] = struct{}{}
 	}
 
-	// Dependency validation
+	// Dependency and condition validation
+	validGlobalConditions := map[string]struct{}{
+		"all_upstream.success":    {},
+		"any_upstream.success":    {},
+		"all_done":                {},
+		"none_failed":             {},
+		"all_success_or_skipped":  {},
+		"any_upstream.failed":     {},
+	}
+
 	for _, t := range tasks {
 		if t.Name == "" {
-			continue // skip dependency checks for invalid tasks
+			continue // skip checks for invalid tasks
 		}
 
 		for _, dep := range t.DependsOn {
 			if _, exists := taskNames[dep]; !exists {
 				errs = append(errs, fmt.Sprintf("task %q depends_on %q which does not exist", t.Name, dep))
+			}
+		}
+
+		if t.Condition != "" {
+			if _, ok := validGlobalConditions[t.Condition]; !ok {
+				// Check for task_name.success / task_name.failed form
+				parts := strings.SplitN(t.Condition, ".", 2)
+				if len(parts) != 2 || (parts[1] != "success" && parts[1] != "failed") {
+					errs = append(errs, fmt.Sprintf("task %q: invalid condition %q (unknown condition)", t.Name, t.Condition))
+				} else if _, exists := taskNames[parts[0]]; !exists {
+					errs = append(errs, fmt.Sprintf("task %q: condition references unknown task %q", t.Name, parts[0]))
+				}
 			}
 		}
 	}
