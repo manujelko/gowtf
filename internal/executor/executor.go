@@ -1188,11 +1188,15 @@ func (e *Executor) handleTaskRetry(ctx context.Context, taskInstance *models.Tas
 			"attempt", newTaskInstance.Attempt)
 
 		// Notify executor to process this run again
-		// Send in a non-blocking way or new goroutine to avoid deadlocks if channel is full
+		e.wg.Add(1)
 		go func() {
-			e.events <- scheduler.WorkflowRunEvent{
+			defer e.wg.Done()
+			select {
+			case e.events <- scheduler.WorkflowRunEvent{
 				WorkflowRunID: workflowRunID,
 				WorkflowID:    workflowRun.WorkflowID,
+			}:
+			case <-e.ctx.Done():
 			}
 		}()
 	}()
