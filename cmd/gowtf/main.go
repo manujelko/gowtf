@@ -56,7 +56,7 @@ func main() {
 
 	// Initialize database
 	logger.Info("Initializing database", "path", *dbPath)
-	db, err := sql.Open("sqlite", *dbPath+"?_timeout=5000&_journal_mode=WAL")
+	db, err := sql.Open("sqlite", *dbPath+"?_timeout=5000&_journal_mode=WAL&_foreign_keys=on")
 	if err != nil {
 		logger.Error("Failed to open database", "error", err)
 		os.Exit(1)
