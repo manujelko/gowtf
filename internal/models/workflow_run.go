@@ -6,6 +6,8 @@ import (
 	"embed"
 	"fmt"
 	"time"
+
+	"github.com/manujelko/gowtf/internal/sqliteutil"
 )
 
 type WorkflowRunStatus int
@@ -108,7 +110,7 @@ func NewWorkflowRunStore(db *sql.DB) (*WorkflowRunStore, error) {
 func (s *WorkflowRunStore) Insert(ctx context.Context, workflowID int, status WorkflowRunStatus) (*WorkflowRun, error) {
 	var res sql.Result
 	var id64 int64
-	err := retryDBOperation(5, func() error {
+	err := sqliteutil.RetryOperation(ctx, 5, func() error {
 		var execErr error
 		res, execErr = s.DB.ExecContext(ctx, s.insertQ, workflowID, status.String())
 		if execErr != nil {
@@ -248,7 +250,7 @@ func (s *WorkflowRunStore) UpdateStatus(ctx context.Context, id int, status Work
 		finishedAny = nil
 	}
 
-	return retryDBOperation(5, func() error {
+	return sqliteutil.RetryOperation(ctx, 5, func() error {
 		_, err := s.DB.ExecContext(ctx, s.updateStatusQ, status.String(), finishedAny, id)
 		return err
 	})
@@ -306,7 +308,7 @@ func (s *WorkflowRunStore) DeleteRuns(ctx context.Context, runIDs []int) error {
 		return nil
 	}
 
-	return retryDBOperation(5, func() error {
+	return sqliteutil.RetryOperation(ctx, 5, func() error {
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
 			return err

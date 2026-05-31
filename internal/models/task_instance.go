@@ -6,6 +6,8 @@ import (
 	"embed"
 	"fmt"
 	"time"
+
+	"github.com/manujelko/gowtf/internal/sqliteutil"
 )
 
 type TaskInstanceState int
@@ -129,7 +131,7 @@ func (s *TaskInstanceStore) Insert(ctx context.Context, ti *TaskInstance) error 
 
 	var res sql.Result
 	var id64 int64
-	err := retryDBOperation(5, func() error {
+	err := sqliteutil.RetryOperation(ctx, 5, func() error {
 		var execErr error
 		res, execErr = s.DB.ExecContext(
 			ctx,
@@ -184,7 +186,7 @@ func (s *TaskInstanceStore) Update(ctx context.Context, ti *TaskInstance) error 
 		stderrPath = *ti.StderrPath
 	}
 
-	return retryDBOperation(5, func() error {
+	return sqliteutil.RetryOperation(ctx, 5, func() error {
 		_, err := s.DB.ExecContext(
 			ctx,
 			s.updateQ,

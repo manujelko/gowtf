@@ -5,69 +5,15 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
 
 	"github.com/manujelko/gowtf/internal/models"
+	"github.com/manujelko/gowtf/internal/sqliteutil"
 	"github.com/manujelko/gowtf/internal/watcher"
 )
-
-// retryDBOperationWithTx retries a transaction operation with exponential backoff
-func retryDBOperationWithTx(ctx context.Context, db *sql.DB, maxRetries int, fn func(*sql.Tx) error) error {
-	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			if isSQLiteBusy(err) && i < maxRetries-1 {
-				backoff := time.Duration(1<<uint(i)) * 10 * time.Millisecond
-				time.Sleep(backoff)
-				lastErr = err
-				continue
-			}
-			return err
-		}
-
-		err = fn(tx)
-		if err != nil {
-			tx.Rollback()
-			if isSQLiteBusy(err) && i < maxRetries-1 {
-				backoff := time.Duration(1<<uint(i)) * 10 * time.Millisecond
-				time.Sleep(backoff)
-				lastErr = err
-				continue
-			}
-			return err
-		}
-
-		err = tx.Commit()
-		if err != nil {
-			if isSQLiteBusy(err) && i < maxRetries-1 {
-				backoff := time.Duration(1<<uint(i)) * 10 * time.Millisecond
-				time.Sleep(backoff)
-				lastErr = err
-				continue
-			}
-			return err
-		}
-
-		return nil
-	}
-	return lastErr
-}
-
-// isSQLiteBusy checks if an error is a SQLite busy/locked error
-func isSQLiteBusy(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "database is locked") ||
-		strings.Contains(errStr, "SQLITE_BUSY") ||
-		strings.Contains(errStr, "database is locked (5)")
-}
 
 // createTaskInstanceInTx creates a task instance within a transaction
 func (s *Scheduler) createTaskInstanceInTx(ctx context.Context, tx *sql.Tx, ti *models.TaskInstance) error {
@@ -368,7 +314,7 @@ func (s *Scheduler) triggerWorkflowRun(ctx context.Context, workflowID int) (*mo
 	// Create task instances for all tasks in a transaction to reduce contention
 	// Retry the entire transaction if we get a busy error
 	var createdCount int
-	err = retryDBOperationWithTx(ctx, s.db, 5, func(tx *sql.Tx) error {
+	err = sqliteutil.RetryWithTx(ctx, s.db, 5, func(tx *sql.Tx) error {
 		createdCount = 0
 		for _, task := range tasks {
 			taskInstance := &models.TaskInstance{
