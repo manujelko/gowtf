@@ -967,8 +967,8 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 				response.Stdout = string(content)
 			}
 		} else {
-			// Debug: show why it failed
-			response.Stdout = fmt.Sprintf("[Debug] Failed to read stdout at %s: %v", stdoutPath, err)
+			s.logger.Error("Failed to read stdout log", "path", stdoutPath, "error", err)
+			response.Stdout = "(log file could not be read)"
 		}
 	}
 
@@ -981,8 +981,8 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 				response.Stderr = string(content)
 			}
 		} else {
-			// Debug: show why it failed
-			response.Stderr = fmt.Sprintf("[Debug] Failed to read stderr at %s: %v", stderrPath, err)
+			s.logger.Error("Failed to read stderr log", "path", stderrPath, "error", err)
+			response.Stderr = "(log file could not be read)"
 		}
 	}
 
