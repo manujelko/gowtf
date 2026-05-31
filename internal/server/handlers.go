@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,11 +96,15 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, tmpl string, dat
 		return
 	}
 
-	// Execute the base template which will use the "content" block from the child template
-	err := t.ExecuteTemplate(w, "base.html", data)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Render to a buffer first so a template error doesn't write a partial response
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, "base.html", data); err != nil {
+		s.logger.Error("Template execution failed", "template", tmpl, "error", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	buf.WriteTo(w)
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
