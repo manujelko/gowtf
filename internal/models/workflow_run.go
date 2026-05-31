@@ -139,6 +139,9 @@ func (s *WorkflowRunStore) GetByID(ctx context.Context, id int) (*WorkflowRun, e
 		&wr.StartedAt,
 		&finished,
 	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
