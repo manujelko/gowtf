@@ -221,20 +221,7 @@ type WorkflowGridData struct {
 }
 
 func (s *Server) handleWorkflowDetail(w http.ResponseWriter, r *http.Request) {
-	// Extract workflow ID from URL path (e.g., /workflow/1)
-	path := r.URL.Path
-	if !strings.HasPrefix(path, "/workflow/") {
-		http.NotFound(w, r)
-		return
-	}
-
-	workflowIDStr := path[len("/workflow/"):]
-	if workflowIDStr == "" {
-		http.NotFound(w, r)
-		return
-	}
-
-	workflowID, err := validateIDParam(workflowIDStr)
+	workflowID, err := validateIDParam(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid workflow ID: %s", err.Error()), http.StatusBadRequest)
 		return
@@ -388,20 +375,7 @@ type GraphData struct {
 }
 
 func (s *Server) handleRunGraph(w http.ResponseWriter, r *http.Request) {
-	// Extract run ID from URL path (e.g., /run/1)
-	path := r.URL.Path
-	if !strings.HasPrefix(path, "/run/") {
-		http.NotFound(w, r)
-		return
-	}
-
-	runIDStr := path[len("/run/"):]
-	if runIDStr == "" {
-		http.NotFound(w, r)
-		return
-	}
-
-	runID, err := validateIDParam(runIDStr)
+	runID, err := validateIDParam(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid run ID: %s", err.Error()), http.StatusBadRequest)
 		return
@@ -717,16 +691,7 @@ func (s *Server) handleToggleWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract workflow ID from URL path
-	path := r.URL.Path
-	if !strings.HasPrefix(path, "/api/workflow/") {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	idStr := strings.TrimPrefix(path, "/api/workflow/")
-	idStr = strings.TrimSuffix(idStr, "/toggle")
-	id, err := validateIDParam(idStr)
+	id, err := validateIDParam(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid workflow ID: %s", err.Error()), http.StatusBadRequest)
 		return
@@ -772,16 +737,7 @@ func (s *Server) handleTriggerWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract workflow ID from URL path
-	path := r.URL.Path
-	if !strings.HasPrefix(path, "/api/workflow/") {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	idStr := strings.TrimPrefix(path, "/api/workflow/")
-	idStr = strings.TrimSuffix(idStr, "/trigger")
-	id, err := validateIDParam(idStr)
+	id, err := validateIDParam(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid workflow ID: %s", err.Error()), http.StatusBadRequest)
 		return
@@ -835,16 +791,7 @@ func (s *Server) handleTaskLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract task instance ID from URL path
-	path := r.URL.Path
-	if !strings.HasPrefix(path, "/api/task-instance/") {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-
-	idStr := strings.TrimPrefix(path, "/api/task-instance/")
-	idStr = strings.TrimSuffix(idStr, "/logs")
-	instanceID, err := validateIDParam(idStr)
+	instanceID, err := validateIDParam(r.PathValue("id"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Invalid task instance ID: %s", err.Error()), http.StatusBadRequest)
 		return

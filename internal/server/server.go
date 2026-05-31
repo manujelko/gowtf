@@ -128,8 +128,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/static/", http.StripPrefix("/static", http.FileServer(http.FS(sub))))
 
 	mux.HandleFunc("GET /{$}", s.handleHome)
-	mux.HandleFunc("GET /workflow/", s.handleWorkflowDetail)
-	mux.HandleFunc("GET /run/", s.handleRunGraph)
+	mux.HandleFunc("GET /workflow/{id}", s.handleWorkflowDetail)
+	mux.HandleFunc("GET /run/{id}", s.handleRunGraph)
 	mux.HandleFunc("POST /api/workflow/{id}/toggle", s.handleToggleWorkflow)
 	mux.HandleFunc("POST /api/workflow/{id}/trigger", s.handleTriggerWorkflow)
 	mux.HandleFunc("GET /api/task-instance/{id}/logs", s.handleTaskLogs)
